@@ -2,7 +2,7 @@
 from collections import defaultdict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QSplitter, QAbstractItemView, QHeaderView, QScrollArea, QSizePolicy, QPlainTextEdit)
@@ -10,6 +10,17 @@ from ui_theme import icon, label, button, card_layout
 from ui_drag import start_paper_drag
 
 ROLE = Qt.ItemDataRole.UserRole
+
+
+class FolderNameEdit(QLineEdit):
+    cancelled = Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
 
 class FoldTree(QTreeWidget):
@@ -77,6 +88,7 @@ class CatalogPage(QWidget):
         self.expanded = {tuple(k) for k in (state or {}).get('expanded', [])}
         self.loaded = {}
         self.rebuilding = False
+        self.folder_edit = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -136,6 +148,9 @@ class CatalogPage(QWidget):
         self.tree.itemClicked.connect(self.item_clicked)
         self.tree.itemDoubleClicked.connect(self.open_item)
         layout.addWidget(self.tree, 1)
+        self.folder_hint = label('', 'muted', True)
+        self.folder_hint.hide()
+        layout.addWidget(self.folder_hint)
         self.empty = label('没有匹配的文献，可调整搜索或侧栏筛选。', 'muted', True)
         layout.addWidget(self.empty)
         actions = QHBoxLayout()
@@ -177,6 +192,8 @@ class CatalogPage(QWidget):
         self.rebuild()
 
     def rebuild(self, *args):
+        if self.folder_edit is not None:
+            return  # Preserve the input and IME composition across background refreshes.
         selected = set(self.selected_ids())
         old_scroll = self.tree.verticalScrollBar().value()
         previous_loaded = dict(self.loaded)
@@ -239,6 +256,118 @@ class CatalogPage(QWidget):
         self.count.setText(f'{total} 篇 · {len(majors)} 个大类')
         self.empty.setVisible(total == 0)
         self.show_detail()
+
+    def folder_item(self, key):
+        for i in range(self.tree.topLevelItemCount()):
+            parent = self.tree.topLevelItem(i)
+            if parent.data(0, ROLE) == ('major', key[0]):
+                if len(key) == 1:
+                    return parent
+                for j in range(parent.childCount()):
+                    child = parent.child(j)
+                    if child.data(0, ROLE) == ('minor', *key):
+                        return child
+
+    def prepare_folder_edit(self):
+        if self.folder_edit is not None and not self.finish_folder_edit():
+            return False
+        self.host.set_page('catalog')
+        self.host.category = None
+        self.host.only_pending = False
+        self.search.clear()
+        self.host.refresh()
+        return True
+
+    def begin_new_folder(self, parent_major=None):
+        if not self.prepare_folder_edit():
+            return
+        parent = self.folder_item((parent_major,)) if parent_major else None
+        if parent_major and parent is None:
+            self.host.status.setText('所在大类已不存在，请刷新后重试。')
+            return
+        names = {m.casefold() for m, _ in self.host.library.categories()} if parent is None else {
+            n.casefold() for m, n in self.host.library.categories() if m == parent_major}
+        name, number = '新建文件夹', 2
+        while name.casefold() in names:
+            name = f'新建文件夹 ({number})'
+            number += 1
+        item = QTreeWidgetItem([name])
+        item.setData(0, ROLE, ('draft',))
+        item.setIcon(0, icon('folder', '#ac86df'))
+        if parent:
+            parent.setExpanded(True)
+            parent.insertChild(0, item)
+        else:
+            self.tree.insertTopLevelItem(0, item)
+        self.start_folder_edit(item, name, parent_major=parent_major)
+
+    def begin_rename_folder(self, key):
+        if not self.prepare_folder_edit():
+            return
+        item = self.folder_item(key)
+        if item:
+            if item.parent():
+                item.parent().setExpanded(True)
+            self.start_folder_edit(item, key[-1], rename_key=tuple(key))
+
+    def start_folder_edit(self, item, name, parent_major=None, rename_key=None):
+        editor = FolderNameEdit(name)
+        editor.setObjectName('folderNameEditor')
+        editor.setMaxLength(80)
+        editor.setFixedHeight(32)
+        self.folder_edit = {'editor': editor, 'item': item, 'parent': parent_major, 'rename': rename_key}
+        self.tree.setItemWidget(item, 0, editor)
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item)
+        self.empty.hide()
+        self.folder_hint.setText('直接输入名称 · Enter 保存 · Esc 取消')
+        self.folder_hint.show()
+        editor.editingFinished.connect(self.finish_folder_edit)
+        editor.cancelled.connect(self.cancel_folder_edit)
+        editor.setFocus(Qt.FocusReason.OtherFocusReason)
+        editor.selectAll()
+
+    def finish_folder_edit(self):
+        edit = self.folder_edit
+        if edit is None:
+            return True
+        try:
+            name = self.host.library.category_name(edit['editor'].text())
+            if self.host.busy:
+                raise ValueError('正在整理文献，请等待完成后再保存名称。')
+            if edit['rename']:
+                key = edit['rename']
+                self.host.library.rename_category(key[0], key[1] if len(key) > 1 else '', name)
+                target = (key[0], name) if len(key) > 1 else (name,)
+            else:
+                parent = edit['parent']
+                categories = self.host.library.categories()
+                exists = any(m.casefold() == name.casefold() for m, _ in categories) if parent is None else any(
+                    m == parent and n.casefold() == name.casefold() for m, n in categories)
+                if exists:
+                    raise ValueError('同级文件夹已存在，请输入其他名称。')
+                target = (parent, name) if parent else (name,)
+                self.host.library.create_category(*target)
+        except (ValueError, OSError) as exc:
+            self.folder_hint.setText(str(exc) + ' · Esc 取消')
+            editor = edit['editor']
+            QTimer.singleShot(0, lambda: editor.setFocus() if self.folder_edit is edit else None)
+            return False
+        self.folder_edit = None
+        self.folder_hint.hide()
+        self.host.refresh()
+        item = self.folder_item(target)
+        if item:
+            if item.parent():
+                item.parent().setExpanded(True)
+            self.tree.setCurrentItem(item)
+            self.tree.scrollToItem(item)
+        return True
+
+    def cancel_folder_edit(self):
+        self.folder_edit = None
+        self.folder_hint.hide()
+        self.host.refresh()
 
     def open_disk(self):
         import os

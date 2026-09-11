@@ -8,7 +8,7 @@ FILES = ['app.py', 'library_core.py', 'platform_support.py', 'desktop_entry.py',
     'api_settings.py', 'paper_sections.py', 'paper_links.py', 'disk_catalog.py',
     'requirements.txt', 'requirements-build.txt', 'README.md', '.gitignore',
     'packaging/QUICK_START.md', 'packaging/build_release.py', 'packaging/stage_source.py',
-    '.github/workflows/desktop-build.yml', 'tests/test_packaging.py']
+    '.github/workflows/desktop-build.yml', 'tests/test_packaging.py', 'tests/test_inline_folders.py']
 
 
 if __name__ == '__main__':

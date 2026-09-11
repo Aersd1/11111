@@ -643,36 +643,7 @@ class App(QMainWindow):
     def create_category_dialog(self, parent_major=None):
         if not self.idle_required():
             return
-        dialog = QDialog(self)
-        dialog.setWindowTitle('新建分类目录')
-        dialog.resize(460, 230)
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(label('新建分类目录', 'sectionTitle'))
-        layout.addWidget(label('创建真实磁盘文件夹，文献通过快捷方式关联原文。', 'muted', True))
-        form = QFormLayout()
-        parent = QComboBox()
-        parent.addItem('新建大类')
-        parent.addItems(sorted({major for major, _ in self.library.categories()}))
-        if parent_major:
-            parent.setCurrentText(parent_major)
-        name = QLineEdit()
-        name.setPlaceholderText('输入自定义目录名称')
-        form.addRow('所在大类', parent)
-        form.addRow('目录名称', name)
-        layout.addLayout(form)
-        def save():
-            try:
-                if parent.currentIndex() == 0:
-                    self.library.create_category(name.text())
-                else:
-                    self.library.create_category(parent.currentText(), name.text())
-            except ValueError as exc:
-                QMessageBox.warning(dialog, '无法创建', str(exc))
-                return
-            dialog.accept()
-            self.refresh()
-        layout.addWidget(button('创建目录', save, 'primary', 'plus'))
-        dialog.exec()
+        self.catalog.begin_new_folder(parent_major or None)
 
     def category_menu(self, point):
         item = self.tree.itemAt(point)
@@ -687,15 +658,7 @@ class App(QMainWindow):
     def rename_category_dialog(self, key):
         if not self.idle_required():
             return
-        name, ok = QInputDialog.getText(self, '重命名目录', '新的目录名称', text=key[-1])
-        if ok:
-            try:
-                self.library.rename_category(key[0], key[1] if len(key) > 1 else '', name)
-            except ValueError as exc:
-                QMessageBox.warning(self, '无法重命名', str(exc))
-                return
-            self.category = None
-            self.refresh()
+        self.catalog.begin_rename_folder(tuple(key))
 
     def open_reference(self, target):
         try:
