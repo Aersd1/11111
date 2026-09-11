@@ -61,4 +61,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "新增目录原位编辑：新建大类、小类及重命名均不再弹窗。直接输入名称，Enter 或点击其他位置保存，Esc 取消，支持中文输入与原位纠错。无需安装 Python。Windows 解压后运行 EXE；Mac 打开 DMG；Linux 解压后运行程序。AI 功能在设置中填写自己的 API。未签名版本可能需要系统首次确认。"
+        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "支持任意层级文件夹与原位编辑：每层都能添加子目录，直接输入名称，Enter 保存、Esc 取消，不再弹窗。父目录重命名、删除和文献筛选包含全部后代。保留旧分类及原文件。无需安装 Python。Windows 解压后运行 EXE；Mac 打开 DMG；Linux 解压后运行程序。AI 功能在设置中填写自己的 API。未签名版本可能需要系统首次确认。"

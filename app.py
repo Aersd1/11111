@@ -19,6 +19,7 @@ from ui_search import SearchPage
 from ui_drag import PaperTable, PAPER_MIME
 from paper_sections import extract_end
 from paper_links import parse_links, decode_links, links_text, open_link
+from folder_paths import parts, packed, ancestors, contains, ui_key
 
 
 class PaperDelegate(QStyledItemDelegate):
@@ -190,7 +191,7 @@ class App(QMainWindow):
         category_head.addWidget(label('分类目录', 'eyebrow'))
         category_head.addStretch()
         new_category = button('', self.create_category_dialog, 'ghost', 'plus')
-        new_category.setToolTip('新建大类或小类；也可右键目录重命名')
+        new_category.setToolTip('新建顶层文件夹；子文件夹可在目录页原位添加')
         category_head.addWidget(new_category)
         side.addLayout(category_head)
         self.tree = FoldTree()
@@ -245,7 +246,7 @@ class App(QMainWindow):
         cards = QHBoxLayout()
         cards.setSpacing(16)
         self.total_card = StatCard('文献总览', '本地索引 · 原文保留', ('#16b5e8', '#0783e8'), 'library')
-        self.organized_card = StatCard('已归类文献', '两级目录 · 清晰有序', ('#b567ef', '#7150e9'), 'folder')
+        self.organized_card = StatCard('已归类文献', '多层目录 · 清晰有序', ('#b567ef', '#7150e9'), 'folder')
         self.pending_card = StatCard('等待整理', '补充信息 · 继续探索', ('#f875b0', '#fc9973'), 'spark')
         for card in (self.total_card, self.organized_card, self.pending_card):
             cards.addWidget(card, 1)
@@ -277,7 +278,7 @@ class App(QMainWindow):
         table_layout.addWidget(self.search)
         self.stack = QStackedWidget()
         self.table = PaperTable(0, 3)
-        self.table.setHorizontalHeaderLabels(['文献 / 题目', '两级分类', '状态'])
+        self.table.setHorizontalHeaderLabels(['文献 / 题目', '所属目录', '状态'])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
@@ -415,11 +416,12 @@ class App(QMainWindow):
         if self.rebuilding_tree:
             return
         key = item.data(0, Qt.ItemDataRole.UserRole)
-        if key and len(key) == 1:
+        if key:
+            name = '/'.join(parts(key))
             if collapsed:
-                self.collapsed_categories.add(key[0])
+                self.collapsed_categories.add(name)
             else:
-                self.collapsed_categories.discard(key[0])
+                self.collapsed_categories.discard(name)
             self.schedule_layout_save()
 
     def reset_pagination(self, *args):
@@ -465,27 +467,29 @@ class App(QMainWindow):
             groups.setdefault(major, {})
             if minor:
                 groups[major].setdefault(minor, 0)
-        for major, minors in sorted(groups.items()):
-            parent = group_item(f'{major}  {sum(minors.values())}', (major,))
-            parent.setToolTip(0, major)
-            self.tree.addTopLevelItem(parent)
-            for minor, count in sorted(minors.items()):
-                child = QTreeWidgetItem([f'{minor}  {count}'])
-                child.setToolTip(0, major + ' / ' + minor)
-                child.setData(0, Qt.ItemDataRole.UserRole, (major, minor))
-                parent.addChild(child)
-                if self.category == (major, minor):
-                    self.tree.setCurrentItem(child)
-            parent.setExpanded(major not in self.collapsed_categories)
-            if self.category == (major,):
-                self.tree.setCurrentItem(parent)
+        folder_counts, folder_items = {}, {}
+        for paper in self.rows:
+            for key in ancestors((paper['major'], paper['minor'])):
+                folder_counts[key] = folder_counts.get(key, 0) + 1
+        for key in self.library.directory_keys():
+            path = parts(key)
+            item = group_item(f'{path[-1]}  {folder_counts.get(key, 0)}', ui_key(key))
+            item.setToolTip(0, ' / '.join(path))
+            if len(path) == 1:
+                self.tree.addTopLevelItem(item)
+            else:
+                folder_items[packed(path[:-1])].addChild(item)
+            folder_items[key] = item
+            item.setExpanded('/'.join(path) not in self.collapsed_categories)
+            if self.category == ui_key(key):
+                self.tree.setCurrentItem(item)
         self.rebuilding_tree = False
         self.no_categories.setVisible(not groups)
         total = len(self.rows)
         pending = sum(self.needs_attention(p) for p in self.rows)
         self.total_card.number.setText(str(total))
         self.organized_card.number.setText(str(sum(p['major'] != '待分类' for p in self.rows)))
-        self.organized_card.subtitle.setText(f'{len([g for g in groups if g != "待分类"])} 个大类 · 两级目录')
+        self.organized_card.subtitle.setText(f'{len(folder_items)} 个文件夹 · 多层目录')
         self.pending_card.number.setText(str(pending))
         self.all_button.setText(f'全部文献    {total}')
         self.pending_button.setText(f'待整理       {pending}')
@@ -524,7 +528,7 @@ class App(QMainWindow):
         for paper in self.rows:
             if self.only_pending and not self.needs_attention(paper):
                 continue
-            if self.category and tuple(paper[k] for k in ('major', 'minor')[:len(self.category)]) != self.category:
+            if self.category and not contains(self.category, (paper['major'], paper['minor'])):
                 continue
             directory_rows.append(paper)
             if query and query not in ' '.join(str(paper[k]) for k in ('title', 'abstract', 'keywords', 'summary', 'major', 'minor', 'note', 'path', 'conclusion', 'limitations', 'description')).casefold():
@@ -649,9 +653,9 @@ class App(QMainWindow):
         item = self.tree.itemAt(point)
         key = tuple(item.data(0, Qt.ItemDataRole.UserRole)) if item else None
         menu = QMenu(self)
-        menu.addAction('新建大类', lambda: self.create_category_dialog())
+        menu.addAction('新建顶层文件夹', lambda: self.create_category_dialog())
         if key:
-            menu.addAction('在此大类新建小类', lambda: self.create_category_dialog(key[0]))
+            menu.addAction('在此新建子文件夹', lambda: self.create_category_dialog(key[0] if len(key) == 1 else key))
             menu.addAction('重命名目录', lambda: self.rename_category_dialog(key))
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
@@ -727,7 +731,7 @@ class App(QMainWindow):
             event.ignore()
             return True
         if not target:
-            self.show_drop_hint('请将文献拖到左侧分类名称，或目录页的大类／小类上')
+            self.show_drop_hint('请将文献拖到左侧或目录页的目标文件夹上')
             event.ignore()
             return True
         event.setDropAction(Qt.DropAction.MoveAction)
@@ -982,7 +986,7 @@ class App(QMainWindow):
         form = QFormLayout()
         form.setVerticalSpacing(12)
         fields = {}
-        for key, caption in [('title', '题目'), ('major', '大类'), ('minor', '小类'), ('keywords', '关键词')]:
+        for key, caption in [('title', '题目'), ('major', '顶层目录'), ('minor', '子目录路径（用 / 分层）'), ('keywords', '关键词')]:
             if key in ('major', 'minor'):
                 entry = QComboBox()
                 entry.setEditable(True)

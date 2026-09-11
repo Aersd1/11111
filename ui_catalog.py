@@ -5,9 +5,10 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QSplitter, QAbstractItemView, QHeaderView, QScrollArea, QSizePolicy, QPlainTextEdit)
+    QLineEdit, QSplitter, QAbstractItemView, QHeaderView, QScrollArea, QSizePolicy, QPlainTextEdit, QTreeWidgetItemIterator)
 from ui_theme import icon, label, button, card_layout
 from ui_drag import start_paper_drag
+from folder_paths import parts, packed, ancestors, contains, ui_key
 
 ROLE = Qt.ItemDataRole.UserRole
 
@@ -103,7 +104,7 @@ class CatalogPage(QWidget):
         self.count = label('', 'muted')
         head.addWidget(self.count)
         head.addStretch()
-        head.addWidget(button('新建大类', host.create_category_dialog, 'soft', 'plus'))
+        head.addWidget(button('新建文件夹', host.create_category_dialog, 'soft', 'plus'))
         head.addWidget(button('打开磁盘目录', self.open_disk, 'ghost'))
         head.addWidget(button('全部收起', self.collapse_all, 'ghost'))
         layout.addLayout(head)
@@ -113,7 +114,7 @@ class CatalogPage(QWidget):
         self.search.addAction(icon('search'), QLineEdit.ActionPosition.LeadingPosition)
         self.search.textChanged.connect(self.rebuild)
         layout.addWidget(self.search)
-        layout.addWidget(label('大类 → 小类 → 文献 · 点击分组收起，双击文献打开原文', 'muted', True))
+        layout.addWidget(label('支持多层文件夹 · 添加可在任意层新建子文件夹 · 双击文献打开原文', 'muted', True))
         self.tree = FoldTree()
         self.tree.setRootIsDecorated(True)
         self.tree.setStyleSheet('QTreeWidget::item { padding: 0px 6px; height: 42px; }')
@@ -207,66 +208,56 @@ class CatalogPage(QWidget):
             if query and query not in ' '.join(str(paper.get(k, '')) for k in ('title', 'keywords', 'abstract', 'summary', 'major', 'minor', 'path', 'description', 'conclusion', 'limitations')).casefold():
                 continue
             self.groups[(paper['major'], paper['minor'])].append(paper)
-        categories = [key for key in self.host.library.categories() if not self.host.category or key[:len(self.host.category)] == self.host.category]
+        keys = {parent for key in self.groups for parent in ancestors(key)}
         if not query and not self.host.only_pending:
-            for major, minor in categories:
-                if minor:
-                    self.groups.setdefault((major, minor), [])
-        majors = {}
+            for key in self.host.library.directory_keys():
+                if not self.host.category or contains(self.host.category, key):
+                    keys.update(ancestors(key))
+        self.folder_items = {}
+        counts = defaultdict(int)
+        for key, papers in self.groups.items():
+            for parent in ancestors(key):
+                counts[parent] += len(papers)
         total = sum(len(p) for p in self.groups.values())
-        for (major, minor), papers in sorted(self.groups.items()):
-            if major not in majors:
-                count = sum(len(values) for (m, _), values in self.groups.items() if m == major)
-                parent = group_item(f'{major}    {count} 篇', ('major', major))
-                self.tree.addTopLevelItem(parent)
-                self.folder_actions(parent, (major,))
-                majors[major] = parent
-            parent = majors[major]
-            key = ('minor', major, minor)
-            item = group_item(f'{minor}    {len(papers)} 篇', key)
-            parent.addChild(item)
-            self.folder_actions(item, (major, minor))
-            is_open = bool(query) or key in self.expanded
+        for key in sorted(keys, key=parts):
+            path = parts(key)
+            identity = ('minor', *key) if key[1] else ('major', key[0])
+            item = group_item(f'{path[-1]}    {counts[key]} 篇', identity)
+            if len(path) == 1:
+                self.tree.addTopLevelItem(item)
+            else:
+                self.folder_items[ui_key(packed(path[:-1]))].addChild(item)
+            self.folder_items[ui_key(key)] = item
+            self.folder_actions(item, ui_key(key))
+        for item in self.folder_items.values():
+            identity = tuple(item.data(0, ROLE))
+            is_open = bool(query) or identity in self.expanded
             if is_open:
-                self.populate(item, max(self.BATCH, previous_loaded.get(key, 0)))
-                item.setExpanded(True)
-            item.setIcon(0, icon('folder', '#ac86df'))
-        if not query and not self.host.only_pending:
-            for major, minor in categories:
-                if not minor and major not in majors:
-                    item = group_item(major + '    0 篇', ('major', major))
-                    self.tree.addTopLevelItem(item)
-                    self.folder_actions(item, (major,))
-                    majors[major] = item
-        for major, item in majors.items():
-            is_open = bool(query) or ('major', major) in self.expanded
+                self.populate(item, max(self.BATCH, previous_loaded.get(identity, 0)))
             item.setExpanded(is_open)
             item.setIcon(0, icon('folder', '#ac86df'))
-        for parent in majors.values():
-            for n in range(parent.childCount()):
-                child = parent.child(n)
-                for i in range(child.childCount()):
-                    entry = child.child(i)
-                    value = entry.data(0, ROLE)
-                    if value and value[0] == 'paper' and value[1] in selected:
-                        entry.setSelected(True)
+        iterator = QTreeWidgetItemIterator(self.tree)
+        while iterator.value():
+            entry = iterator.value()
+            value = entry.data(0, ROLE)
+            if value and value[0] == 'paper' and value[1] in selected:
+                entry.setSelected(True)
+            iterator += 1
         self.tree.blockSignals(False)
         self.rebuilding = False
         self.tree.verticalScrollBar().setValue(old_scroll)
-        self.count.setText(f'{total} 篇 · {len(majors)} 个大类')
+        self.count.setText(f'{total} 篇 · {len(self.folder_items)} 个文件夹')
         self.empty.setVisible(total == 0)
         self.show_detail()
 
     def folder_item(self, key):
-        for i in range(self.tree.topLevelItemCount()):
-            parent = self.tree.topLevelItem(i)
-            if parent.data(0, ROLE) == ('major', key[0]):
-                if len(key) == 1:
-                    return parent
-                for j in range(parent.childCount()):
-                    child = parent.child(j)
-                    if child.data(0, ROLE) == ('minor', *key):
-                        return child
+        return getattr(self, 'folder_items', {}).get(ui_key(key))
+
+    def reveal_folder(self, item):
+        parent = item.parent()
+        while parent:
+            parent.setExpanded(True)
+            parent = parent.parent()
 
     def prepare_folder_edit(self):
         if self.folder_edit is not None and not self.finish_folder_edit():
@@ -281,12 +272,13 @@ class CatalogPage(QWidget):
     def begin_new_folder(self, parent_major=None):
         if not self.prepare_folder_edit():
             return
-        parent = self.folder_item((parent_major,)) if parent_major else None
+        parent_key = (parent_major,) if isinstance(parent_major, str) else parent_major
+        parent = self.folder_item(parent_key) if parent_key else None
         if parent_major and parent is None:
-            self.host.status.setText('所在大类已不存在，请刷新后重试。')
+            self.host.status.setText('所在文件夹已不存在，请刷新后重试。')
             return
-        names = {m.casefold() for m, _ in self.host.library.categories()} if parent is None else {
-            n.casefold() for m, n in self.host.library.categories() if m == parent_major}
+        parent_path = parts(parent_key) if parent_key else ()
+        names = {parts(key)[-1].casefold() for key in self.host.library.directory_keys() if parts(key)[:-1] == parent_path}
         name, number = '新建文件夹', 2
         while name.casefold() in names:
             name = f'新建文件夹 ({number})'
@@ -295,20 +287,20 @@ class CatalogPage(QWidget):
         item.setData(0, ROLE, ('draft',))
         item.setIcon(0, icon('folder', '#ac86df'))
         if parent:
+            self.reveal_folder(parent)
             parent.setExpanded(True)
             parent.insertChild(0, item)
         else:
             self.tree.insertTopLevelItem(0, item)
-        self.start_folder_edit(item, name, parent_major=parent_major)
+        self.start_folder_edit(item, name, parent_major=parent_key)
 
     def begin_rename_folder(self, key):
         if not self.prepare_folder_edit():
             return
         item = self.folder_item(key)
         if item:
-            if item.parent():
-                item.parent().setExpanded(True)
-            self.start_folder_edit(item, key[-1], rename_key=tuple(key))
+            self.reveal_folder(item)
+            self.start_folder_edit(item, parts(key)[-1], rename_key=tuple(key))
 
     def start_folder_edit(self, item, name, parent_major=None, rename_key=None):
         editor = FolderNameEdit(name)
@@ -338,15 +330,14 @@ class CatalogPage(QWidget):
             if edit['rename']:
                 key = edit['rename']
                 self.host.library.rename_category(key[0], key[1] if len(key) > 1 else '', name)
-                target = (key[0], name) if len(key) > 1 else (name,)
+                target = packed((*parts(key)[:-1], name))
             else:
                 parent = edit['parent']
-                categories = self.host.library.categories()
-                exists = any(m.casefold() == name.casefold() for m, _ in categories) if parent is None else any(
-                    m == parent and n.casefold() == name.casefold() for m, n in categories)
+                categories = self.host.library.directory_keys()
+                target = packed((*(parts(parent) if parent else ()), name))
+                exists = any(tuple(n.casefold() for n in key) == tuple(n.casefold() for n in target) for key in categories)
                 if exists:
                     raise ValueError('同级文件夹已存在，请输入其他名称。')
-                target = (parent, name) if parent else (name,)
                 self.host.library.create_category(*target)
         except (ValueError, OSError) as exc:
             self.folder_hint.setText(str(exc) + ' · Esc 取消')
@@ -358,8 +349,7 @@ class CatalogPage(QWidget):
         self.host.refresh()
         item = self.folder_item(target)
         if item:
-            if item.parent():
-                item.parent().setExpanded(True)
+            self.reveal_folder(item)
             self.tree.setCurrentItem(item)
             self.tree.scrollToItem(item)
         return True
@@ -384,7 +374,7 @@ class CatalogPage(QWidget):
         row = QHBoxLayout(panel)
         row.setContentsMargins(0, 2, 0, 2)
         row.setSpacing(2)
-        add = lambda: self.host.create_category_dialog(key[0]) if len(key) == 1 else self.add_to_folder(key)
+        add = lambda: self.host.create_category_dialog(key[0] if len(key) == 1 else key)
         for text, callback in [('添加', add), ('删除', lambda: self.host.delete_category_dialog(key)),
                                ('重命名', lambda: self.host.rename_category_dialog(key))]:
             control = button(text, callback, 'ghost')
@@ -403,7 +393,7 @@ class CatalogPage(QWidget):
 
     def populate(self, item, amount=None):
         key = tuple(item.data(0, ROLE))
-        papers = self.groups.get(tuple(key[1:]), [])
+        papers = self.groups.get((key[1], '') if key[0] == 'major' else tuple(key[1:]), [])
         start = self.loaded.get(key, 0)
         if item.childCount() and item.child(item.childCount() - 1).data(0, ROLE)[0] == 'more':
             item.takeChild(item.childCount() - 1)
@@ -425,7 +415,7 @@ class CatalogPage(QWidget):
 
     def on_expanded(self, item):
         key = tuple(item.data(0, ROLE))
-        if key[0] == 'minor' and not self.loaded.get(key):
+        if key[0] in ('major', 'minor') and not self.loaded.get(key):
             self.populate(item)
         if not self.rebuilding:
             self.expanded.add(key)
@@ -476,7 +466,7 @@ class CatalogPage(QWidget):
                       ('局限', 'eyebrow'), (paper.get('limitations') or '未识别独立局限段，请结合结论核对。', None),
                       ('原文件', 'eyebrow'), (paper['path'], 'muted')]
         else:
-            fields = [('按目录浏览文献', 'sectionTitle'), ('点击大类和小类展开目录，再选择文献查看总结与摘要。', 'muted')]
+            fields = [('按目录浏览文献', 'sectionTitle'), ('逐层展开文件夹，再选择文献查看总结与摘要。每个文件夹的“添加”都可以创建子文件夹。', 'muted')]
         for text, style in fields:
             if paper and text == paper['path']:
                 path_box = QPlainTextEdit(text)

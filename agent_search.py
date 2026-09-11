@@ -4,6 +4,7 @@ import re
 import urllib.request
 from api_settings import read_config
 from local_search import BM25Index, tokens
+from folder_paths import contains
 
 
 def model_json(config_path, instruction, data, max_tokens):
@@ -50,7 +51,7 @@ def agent_search(rows, query, limit, config_path, caller=model_json):
         if not isinstance(selected, list):
             raise ValueError()
         chosen = {categories[n] for n in selected[:5] if type(n) is int and 0 <= n < len(menu)}
-        scoped = [p for p in rows if (p['major'], p['minor']) in chosen] if chosen else rows
+        scoped = [p for p in rows if any(contains(key, (p['major'], p['minor'])) for key in chosen)] if chosen else rows
         scoped_index = BM25Index()
         scoped_index.update(scoped)
         rewritten = rewritten[:200]

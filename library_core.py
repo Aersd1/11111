@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 if not getattr(sys, 'frozen', False):
     sys.path.insert(0, str(ROOT / '.vendor'))
 from platform_support import data_root, open_native, open_with
+from folder_paths import parts, packed, ancestors, contains
 DATA_ROOT = data_root()
 SUPPORTED = {'.pdf', '.txt', '.md', '.docx'}
 DEFAULT_RULES = [
@@ -126,18 +127,23 @@ class Library:
 
     def create_category(self, major, minor=''):
         major = self.category_name(major)
-        minor = self.category_name(minor) if minor else ''
-        for m, n in self.categories():
-            if m.casefold() == major.casefold() and m != major:
-                raise ValueError('已有同名大类（Windows 不区分大小写）。')
-            if m == major and n.casefold() == minor.casefold() and n != minor:
-                raise ValueError('已有同名小类（Windows 不区分大小写）。')
+        minor = '/'.join(self.category_name(n) for n in minor.split('/')) if minor else ''
+        new_keys = ancestors((major, minor))
+        existing = self.directory_keys()
+        for key in new_keys:
+            for old in existing:
+                if tuple(s.casefold() for s in key) == tuple(s.casefold() for s in old) and key != old:
+                    raise ValueError('同级已有同名文件夹（不区分大小写）。')
         with self.connect() as db:
-            db.execute('INSERT OR IGNORE INTO categories VALUES (?,?)', (major, minor))
+            db.executemany('INSERT OR IGNORE INTO categories VALUES (?,?)', new_keys)
         return major, minor
 
+    def directory_keys(self):
+        return sorted({parent for key in self.categories() for parent in ancestors(key)}, key=parts)
+
     def assign_category(self, ids, major, minor=''):
-        major, minor = self.category_name(major), self.category_name(minor or '未细分')
+        major = self.category_name(major)
+        minor = '/'.join(self.category_name(n) for n in (minor or '未细分').split('/'))
         ids = list(dict.fromkeys(int(i) for i in ids))
         if not ids:
             return
@@ -145,23 +151,26 @@ class Library:
             for paper_id in ids:
                 if not db.execute('SELECT id FROM papers WHERE id=?', (paper_id,)).fetchone():
                     raise ValueError('部分文献索引已不存在，请刷新后重试。')
-            db.execute('INSERT OR IGNORE INTO categories VALUES (?,?)', (major, minor))
+            db.executemany('INSERT OR IGNORE INTO categories VALUES (?,?)', ancestors((major, minor)))
             db.executemany('UPDATE papers SET major=?,minor=?,category_locked=1 WHERE id=?', [(major, minor, i) for i in ids])
 
     def rename_category(self, major, minor, name):
         name = self.category_name(name)
-        target = (major, name) if minor else (name, '')
-        if (minor and name == minor) or (not minor and name == major):
+        old_path = parts((major, minor))
+        target = packed((*old_path[:-1], name))
+        if name == old_path[-1]:
             return
-        existing = self.categories()
-        if (minor and any(m == major and n.casefold() == name.casefold() for m, n in existing)) or (not minor and any(m.casefold() == name.casefold() for m, _ in existing)):
+        if any(tuple(s.casefold() for s in key) == tuple(s.casefold() for s in target) for key in self.directory_keys()):
             raise ValueError('同级目录已存在，请使用其他名称。')
         from disk_catalog import safe_name
-        source = self.catalog_root / safe_name(major)
-        destination = self.catalog_root / safe_name(name)
-        if minor:
-            source = source / safe_name(minor)
-            destination = self.catalog_root / safe_name(major) / safe_name(name)
+        source = self.catalog_root.joinpath(*(safe_name(n) for n in old_path))
+        destination = self.catalog_root.joinpath(*(safe_name(n) for n in parts(target)))
+        def renamed(key):
+            return packed((*parts(target), *parts(key)[len(old_path):]))
+        old_key = major, minor
+        folders = [(key, renamed(key)) for key in self.categories() if contains(old_key, key)]
+        papers = [(p['id'], renamed((p['major'], p['minor']))) for p in self.all() if contains(old_key, (p['major'], p['minor']))]
+        moved = False
         if source.exists():
             if source.is_symlink() or not source.resolve().is_relative_to(self.catalog_root.resolve()):
                 raise ValueError('目录路径异常，无法重命名。')
@@ -169,28 +178,30 @@ class Library:
                 raise ValueError('磁盘上已有同名文件夹，请使用其他名称。')
             try:
                 source.rename(destination)
+                moved = True
             except OSError:
                 raise ValueError('磁盘文件夹无法重命名，请检查是否被占用。') from None
-        with self.connect() as db:
-            if minor:
-                db.execute('UPDATE papers SET minor=? WHERE major=? AND minor=?', (name, major, minor))
-                db.execute('DELETE FROM categories WHERE major=? AND minor=?', (major, minor))
-                db.execute('INSERT OR IGNORE INTO categories VALUES (?,?)', target)
-            else:
-                db.execute('UPDATE papers SET major=? WHERE major=?', (name, major))
-                db.execute('UPDATE categories SET major=? WHERE major=?', (name, major))
-                db.execute('INSERT OR IGNORE INTO categories VALUES (?,?)', target)
+        try:
+            with self.connect() as db:
+                db.executemany('DELETE FROM categories WHERE major=? AND minor=?', [old for old, _ in folders])
+                db.executemany('INSERT OR IGNORE INTO categories VALUES (?,?)', [new for _, new in folders] + [target])
+                db.executemany('UPDATE papers SET major=?,minor=? WHERE id=?', [(key[0], key[1], ident) for ident, key in papers])
+        except Exception:
+            if moved:
+                destination.rename(source)
+            raise
 
     def delete_category(self, major, minor=''):
         if major == '待分类':
             raise ValueError('待分类目录用于保存未归类文献，不能删除。')
-        where = 'major=?' + (' AND minor=?' if minor else '')
-        values = (major, minor) if minor else (major,)
+        key = major, minor
+        folders = [folder for folder in self.categories() if contains(key, folder)]
+        ids = [p['id'] for p in self.all() if contains(key, (p['major'], p['minor']))]
         with self.connect() as db:
-            db.execute("UPDATE papers SET major='待分类',minor='待确认',category_locked=0 WHERE " + where, values)
-            db.execute('DELETE FROM categories WHERE ' + where, values)
+            db.executemany("UPDATE papers SET major='待分类',minor='待确认',category_locked=0 WHERE id=?", [(i,) for i in ids])
+            db.executemany('DELETE FROM categories WHERE major=? AND minor=?', folders)
             if minor:
-                db.execute('INSERT OR IGNORE INTO categories VALUES (?,?)', (major, ''))
+                db.execute('INSERT OR IGNORE INTO categories VALUES (?,?)', packed(parts(key)[:-1]))
 
 
 def read_front(path):

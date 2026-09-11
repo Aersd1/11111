@@ -8,8 +8,9 @@ from library_core import Library
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QInputMethodEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 from ui_theme import setup_application
+from folder_paths import packed, ui_key
 
 QAPP = QApplication.instance() or QApplication([])
 setup_application(QAPP)
@@ -92,6 +93,43 @@ class InlineFolderTests(unittest.TestCase):
         self.window.catalog.search.setFocus()
         QAPP.processEvents()
         self.assertIn(('直接在文件夹位置输入', ''), self.lib.categories())
+
+    def test_five_levels_add_buttons_drag_target_and_parent_rename_delete(self):
+        self.window.create_category_dialog()
+        self.enter_name('我的项目')
+        path = ['我的项目']
+        for name in ('研究方向', '具体课题', '实验分组', '文献资料'):
+            item = self.window.catalog.folder_item(ui_key(packed(path)))
+            self.window.catalog.tree.itemWidget(item, 1).findChildren(QPushButton)[0].click()
+            self.assertIsNotNone(self.window.catalog.folder_edit)
+            self.enter_name(name)
+            path.append(name)
+        self.assertTrue(self.lib.catalog_root.joinpath(*path).is_dir())
+        source = Path(self.temp.name) / 'paper.txt'
+        source.write_text('研究资料', 'utf-8')
+        ident, _ = self.lib.add(source)
+        self.lib.assign_category([ident], *packed(path))
+        self.lib.create_category('我的项目', '研究方向相似/其他')
+        self.window.refresh()
+        page = self.window.catalog
+        item = page.folder_item(packed(path))
+        page.reveal_folder(item)
+        QAPP.processEvents()
+        target = self.window.drop_category_target(page.tree.viewport(), page.tree.visualItemRect(item).center())
+        self.assertEqual(target, packed(path))
+        self.window.category = ('我的项目', '研究方向')
+        self.window.refresh_list()
+        self.assertEqual(len(self.window.catalog.rows), 1)
+        self.window.rename_category_dialog(('我的项目', '研究方向'))
+        self.enter_name('新的方向')
+        self.assertEqual(self.lib.get(ident)['minor'], '新的方向/具体课题/实验分组/文献资料')
+        self.assertTrue(self.lib.catalog_root.joinpath('我的项目', '新的方向', *path[2:]).is_dir())
+        self.lib.delete_category('我的项目', '新的方向')
+        self.window.refresh()
+        self.assertEqual(self.lib.get(ident)['major'], '待分类')
+        self.assertTrue(source.is_file())
+        self.assertIn(('我的项目', '研究方向相似/其他'), self.lib.categories())
+        self.assertFalse((self.lib.catalog_root / '我的项目/新的方向').exists())
 
 
 if __name__ == '__main__':

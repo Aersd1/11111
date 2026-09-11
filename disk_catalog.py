@@ -4,6 +4,7 @@ import re
 import os
 import sys
 from pathlib import Path
+from folder_paths import parts, ancestors
 
 
 def safe_name(value):
@@ -19,14 +20,10 @@ def sync_catalog(library):
     manifest = root / '.catalog-index.json'
     previous = json.loads(manifest.read_text('utf-8')) if manifest.exists() else {'files': {}, 'dirs': []}
     wanted, dirs = {}, set()
-    for major, minor in library.categories():
-        parent = safe_name(major)
-        dirs.add(parent)
-        if minor:
-            dirs.add(parent + '/' + safe_name(minor))
+    for key in library.directory_keys():
+        dirs.add('/'.join(safe_name(n) for n in parts(key)))
     for paper in library.all():
-        folder = safe_name(paper['major']) + '/' + safe_name(paper['minor'])
-        dirs.update((safe_name(paper['major']), folder))
+        folder = '/'.join(safe_name(n) for n in parts((paper['major'], paper['minor'])))
         name = folder + '/' + safe_name(paper['title']) + f" [{paper['id']}]"
         if sys.platform == 'win32':
             wanted[name + '.url'] = '[InternetShortcut]\nURL=' + Path(paper['path']).resolve().as_uri() + '\n'
