@@ -1,0 +1,15 @@
+.vendor/
+.build-tools/
+__pycache__/
+*.pyc
+data/
+模型接口/
+文献目录/
+build/
+dist/
+release/
+release-repository/
+output/
+*.sqlite3*
+*.log
+*.spec
