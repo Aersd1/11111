@@ -44,7 +44,7 @@ class PackagingTests(unittest.TestCase):
             entries = list(root.rglob('*.url')) if sys.platform == 'win32' else [p for p in root.rglob('*') if p.is_symlink()]
             self.assertEqual(len(entries), 1)
             if sys.platform != 'win32':
-                self.assertEqual(entries[0].resolve(), original)
+                self.assertEqual(entries[0].resolve(), original.resolve())
             lib.remove(ident)
             sync_catalog(lib)
             self.assertEqual(original.read_text(), 'original')

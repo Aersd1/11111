@@ -4,7 +4,7 @@
 
 发布版本自带 Python、Qt 与 PDF 读取组件，无需安装 Python 或配置开发环境。Windows 解压后双击 `LiteratureShelf.exe`；macOS 提供 Apple Silicon / Intel 的 DMG；Linux 提供适用于现代 x86_64 桌面的 tar.gz。详见 [使用说明](packaging/QUICK_START.md)。
 
-GitHub 的 **Actions → Desktop packages → Run workflow** 会在四台对应系统的构建机上自动打包并测试，每个任务的 Artifacts 中可下载对应平台的成品。向 main 推送代码也会自动构建。macOS 包未公证，系统可能要求首次确认来源；不应关闭全局安全保护。
+GitHub 的 **Actions → Desktop packages → Run workflow** 会在四台对应系统的构建机上自动打包并测试，每个任务的 Artifacts 中可下载对应平台的成品。推送 `v` 开头的版本标签会自动构建并发布到 Releases。macOS 包未公证，系统可能要求首次确认来源；不应关闭全局安全保护。
 
 开发者本地构建：安装 `requirements-build.txt`，运行 `python packaging/build_release.py`。输出在 `release/`；构建会运行封包后的程序验证启动、PDF 读取、分类和搜索，不包含用户文献或 API 密钥。
 
