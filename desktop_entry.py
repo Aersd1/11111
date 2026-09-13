@@ -10,7 +10,7 @@ def main():
         target = Path(sys.argv[sys.argv.index('--smoke-test') + 1]).resolve()
         target.mkdir(parents=True, exist_ok=True)
         os.environ['LITERATURE_DATA_DIR'] = str(target)
-        os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
         os.environ.setdefault('QTWEBENGINE_CHROMIUM_FLAGS', '--disable-gpu')
     from app import App
     from PySide6.QtCore import QLockFile

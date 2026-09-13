@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: requirements*.txt
       - name: Linux Qt libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-image0 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 fonts-noto-cjk
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libegl1 libopengl0 libxkbcommon0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-image0 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 fonts-noto-cjk
       - run: python -m pip install -r requirements-build.txt
       - name: Cross-platform checks
         run: python -m unittest discover -s tests -p test_packaging.py -v
@@ -42,9 +42,25 @@ jobs:
       - name: Full-text analysis and Markdown
         run: python -m unittest discover -s tests -p test_fulltext_agent.py -v
       - name: Live formula editor
-        run: python -m unittest discover -s tests -p test_live_markdown.py -v
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: ${{ runner.os == 'macOS' && 'cocoa' || runner.os == 'Linux' && 'xcb' || 'offscreen' }}
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a python -m unittest discover -s tests -p test_live_markdown.py -v
+          else
+            python -m unittest discover -s tests -p test_live_markdown.py -v
+          fi
       - name: Build and test packaged application
-        run: python packaging/build_release.py
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: ${{ runner.os == 'macOS' && 'cocoa' || runner.os == 'Linux' && 'xcb' || 'offscreen' }}
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a python packaging/build_release.py
+          else
+            python packaging/build_release.py
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: LiteratureShelf-${{ matrix.label }}
