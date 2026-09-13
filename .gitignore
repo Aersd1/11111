@@ -7,9 +7,12 @@ data/
 文献目录/
 build/
 dist/
+dist-*/
 release/
 release-repository/
 output/
+analysis-cache/
+previews/
 *.sqlite3*
 *.log
 *.spec

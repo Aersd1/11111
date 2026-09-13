@@ -468,6 +468,10 @@ class CatalogPage(QWidget):
         else:
             fields = [('按目录浏览文献', 'sectionTitle'), ('逐层展开文件夹，再选择文献查看总结与摘要。每个文件夹的“添加”都可以创建子文件夹。', 'muted')]
         for text, style in fields:
+            if paper and style is None and text in (paper.get('summary'), paper.get('description')):
+                from markdown_ui import markdown_view
+                self.detail_layout.addWidget(markdown_view(text))
+                continue
             if paper and text == paper['path']:
                 path_box = QPlainTextEdit(text)
                 path_box.setReadOnly(True)
@@ -482,6 +486,9 @@ class CatalogPage(QWidget):
             self.detail_layout.addWidget(widget)
         if paper:
             from paper_links import decode_links
+            self.detail_layout.addWidget(button('全文 Agent 分析 / 再次分析', self.host.fulltext_dialog, 'soft'))
+            self.detail_layout.addWidget(button('总结历史版本', self.host.history_dialog, 'soft'))
+            self.detail_layout.addWidget(button('总结排版预览（含公式）', lambda: self.host.open_markdown_preview(paper['summary']), 'soft'))
             for link in decode_links(paper.get('links')):
                 self.detail_layout.addWidget(button(link['label'], lambda url=link['url']: self.host.open_reference(url), 'soft', 'open'))
         self.detail_layout.addStretch()

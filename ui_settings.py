@@ -14,6 +14,7 @@ from api_settings import read_config, validate_config, write_config
 from library_core import call_model_config
 from ui_theme import label, button
 from platform_support import open_native, valid_program
+from fulltext_agent import QUESTIONS, questions_from
 import sys
 
 
@@ -121,6 +122,23 @@ class SettingsDialog(QDialog):
         general_layout.addWidget(label('添加文件后按默认方式整理。手动与本地规则模式不联网，使用原文摘录。\n\n大模型读取题目、摘要、关键词、结论和局限段；无法确定分类时才补充引言前两段。原文件不上传，个人描述和链接不发送给模型。', 'muted', True))
         general_layout.addStretch()
         self.tabs.addTab(general, '阅读与整理')
+        analysis_page = QWidget()
+        analysis_layout = QVBoxLayout(analysis_page)
+        analysis_layout.addWidget(label('全文 Agent · 默认分析问题', 'sectionTitle'))
+        analysis_layout.addWidget(label('每行一个问题。逐段阅读全部可提取正文，必要时回读原文，再按这些问题生成总结。全文模式需主动选择，普通整理仍使用摘要等有限内容。', 'muted', True))
+        self.analysis_questions = QPlainTextEdit(self.settings.get('analysis_questions', '\n'.join(QUESTIONS)))
+        analysis_layout.addWidget(self.analysis_questions, 1)
+        analysis_layout.addWidget(button('恢复论文十问', lambda: self.analysis_questions.setPlainText('\n'.join(QUESTIONS)), 'ghost'))
+        analysis_form = QFormLayout()
+        self.analysis_max_calls = QSpinBox()
+        self.analysis_max_calls.setRange(4, 128)
+        self.analysis_max_calls.setValue(self.settings.get('analysis_max_calls', 32))
+        analysis_form.addRow('单篇最大模型调用次数', self.analysis_max_calls)
+        analysis_layout.addLayout(analysis_form)
+        analysis_layout.addWidget(label('每段约 12000 字符，全文越长消耗越大。超过上限会在发送正文前停止，不会偷偷截断。问题或文件变动会使旧阅读缓存失效。', 'muted', True))
+        self.tabs.addTab(analysis_page, '全文分析')
+        self.analysis_questions.textChanged.connect(self.mark_dirty)
+        self.analysis_max_calls.valueChanged.connect(self.mark_dirty)
         rules_page = QWidget()
         rules_layout = QVBoxLayout(rules_page)
         rules_layout.setContentsMargins(2, 20, 2, 8)
@@ -299,6 +317,7 @@ class SettingsDialog(QDialog):
 
     def save_and_use(self):
         try:
+            questions_from(self.analysis_questions.toPlainText())
             rules = json.loads(self.rules.toPlainText())
             if not isinstance(rules, list) or not all(isinstance(r, dict) and all(isinstance(r.get(k), str) and r[k].strip() for k in ('major', 'minor')) and isinstance(r.get('terms'), list) and all(isinstance(t, str) and t.strip() for t in r['terms']) for r in rules):
                 raise ValueError('分类规则需要 major、minor 和 terms 字符串列表。')
@@ -311,7 +330,8 @@ class SettingsDialog(QDialog):
                 if self.api_dirty or not Path(self.path.text()).is_file():
                     write_config(self.path.text(), document)
             self.library.save_settings({**self.settings, 'api_config': self.path.text(), 'mode': self.mode.currentText(),
-                'opener': self.opener.currentText(), 'program': self.program.text().strip(), 'rules': rules})
+                'opener': self.opener.currentText(), 'program': self.program.text().strip(), 'rules': rules,
+                'analysis_questions': self.analysis_questions.toPlainText(), 'analysis_max_calls': self.analysis_max_calls.value()})
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, '无法保存', str(exc))
             return

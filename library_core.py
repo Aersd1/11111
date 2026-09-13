@@ -56,10 +56,11 @@ class Library:
             for name, definition in {'conclusion': "TEXT DEFAULT ''", 'limitations': "TEXT DEFAULT ''",
                     'description': "TEXT DEFAULT ''", 'links': "TEXT DEFAULT '[]'",
                     'category_locked': 'INTEGER DEFAULT 0', 'end_checked': 'INTEGER DEFAULT 0',
-                    'end_note': "TEXT DEFAULT ''"}.items():
+                    'end_note': "TEXT DEFAULT ''", 'analysis_info': "TEXT DEFAULT '{}'"}.items():
                 if name not in columns:
                     db.execute(f'ALTER TABLE papers ADD COLUMN {name} {definition}')
             db.execute('CREATE TABLE IF NOT EXISTS categories (major TEXT NOT NULL, minor TEXT NOT NULL DEFAULT "", PRIMARY KEY(major,minor))')
+            db.execute('CREATE TABLE IF NOT EXISTS summary_history (id INTEGER PRIMARY KEY, paper_id INTEGER NOT NULL, summary TEXT NOT NULL, basis TEXT, analysis_info TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP)')
 
     @contextmanager
     def connect(self):
@@ -103,14 +104,31 @@ class Library:
 
     def update(self, paper_id, **fields):
         allowed = {'path', 'title', 'abstract', 'keywords', 'introduction', 'major', 'minor', 'summary', 'basis', 'status', 'note'}
-        allowed.update({'conclusion', 'limitations', 'description', 'links', 'category_locked', 'end_checked', 'end_note'})
+        allowed.update({'conclusion', 'limitations', 'description', 'links', 'category_locked', 'end_checked', 'end_note', 'analysis_info'})
         if not fields or not set(fields) <= allowed:
             raise ValueError('无效字段')
         with self.connect() as db:
+            if 'summary' in fields:
+                old = db.execute('SELECT summary,basis,analysis_info FROM papers WHERE id=?', (paper_id,)).fetchone()
+                if old and old['summary'] and old['summary'] != fields['summary']:
+                    db.execute('INSERT INTO summary_history(paper_id,summary,basis,analysis_info) VALUES(?,?,?,?)', (paper_id, *tuple(old)))
+                if old and old['summary'] != fields['summary'] and 'analysis_info' not in fields:
+                    fields['analysis_info'] = '{}'
             db.execute('UPDATE papers SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?', (*fields.values(), paper_id))
+
+    def summary_history(self, paper_id):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('SELECT * FROM summary_history WHERE paper_id=? ORDER BY id DESC', (paper_id,))]
+
+    def restore_summary(self, paper_id, history_id):
+        item = next((row for row in self.summary_history(paper_id) if row['id'] == history_id), None)
+        if not item:
+            raise ValueError('历史总结已不存在。')
+        self.update(paper_id, summary=item['summary'], analysis_info=item['analysis_info'] or '{}', basis='恢复历史总结', status='已恢复总结')
 
     def remove(self, paper_id):
         with self.connect() as db:
+            db.execute('DELETE FROM summary_history WHERE paper_id=?', (paper_id,))
             db.execute('DELETE FROM papers WHERE id=?', (paper_id,))
 
     def categories(self):

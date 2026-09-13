@@ -208,11 +208,18 @@ class SearchPage(QWidget):
         else:
             fields = [('找到值得阅读的论文', 'sectionTitle'), ('搜索结果只来自本地库；没有命中时不会编造文件或描述。', 'muted')]
         for text, role in fields:
+            if found and role is None and text in (paper.get('summary'), paper.get('description')):
+                from markdown_ui import markdown_view
+                self.detail.addWidget(markdown_view(text))
+                continue
             value = label(text, role, True)
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             self.detail.addWidget(value)
         if found:
+            self.detail.addWidget(button('全文 Agent 分析 / 再次分析', self.host.fulltext_dialog, 'soft'))
+            self.detail.addWidget(button('总结历史版本', self.host.history_dialog, 'soft'))
+            self.detail.addWidget(button('总结排版预览（含公式）', lambda: self.host.open_markdown_preview(paper['summary']), 'soft'))
             self.detail.addWidget(label('原文件位置', 'eyebrow'))
             path_box = QPlainTextEdit(paper['path'])
             path_box.setReadOnly(True)

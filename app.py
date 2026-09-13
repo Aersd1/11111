@@ -20,6 +20,8 @@ from ui_drag import PaperTable, PAPER_MIME
 from paper_sections import extract_end
 from paper_links import parse_links, decode_links, links_text, open_link
 from folder_paths import parts, packed, ancestors, contains, ui_key
+from fulltext_agent import analyze
+from markdown_ui import MarkdownEdit, editor_toolbar, markdown_view, open_typeset
 
 
 class PaperDelegate(QStyledItemDelegate):
@@ -610,6 +612,9 @@ class App(QMainWindow):
         self.detail_type.setText(Path(paper['path']).suffix[1:].upper())
         def section(layout, title, text):
             layout.addWidget(label(title, 'eyebrow'))
+            if title in ('研究总结', '个人描述'):
+                layout.addWidget(markdown_view(text))
+                return
             value = label(text, wrap=True)
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             value.setStyleSheet('font-size:14px; color:#646781;')
@@ -617,7 +622,10 @@ class App(QMainWindow):
         summary, abstract, file = self.detail_bodies
         section(summary, '研究总结', paper['summary'] or '尚未生成总结。点击“整理”开始，或通过“编辑”补充摘要。')
         section(summary, '整理依据', paper['basis'] or '尚未整理')
-        summary.addWidget(label('根据摘要等有限内容生成，请结合原文核对。', 'muted', True))
+        summary.addWidget(button('全文 Agent 分析 / 再次分析', self.fulltext_dialog, 'soft'))
+        summary.addWidget(button('总结历史版本', self.history_dialog, 'soft'))
+        summary.addWidget(button('总结排版预览（含公式）', lambda: self.open_markdown_preview(paper['summary']), 'soft'))
+        summary.addWidget(label('可选全文阅读；普通整理仍使用摘要等信息。请结合原文核对生成内容。', 'muted', True))
         section(abstract, '摘要', paper['abstract'] or '尚未识别，可手动补充。')
         section(abstract, '关键词', paper['keywords'] or '尚未识别')
         section(abstract, '引言前两段 · 备用', paper['introduction'] or '尚未识别')
@@ -856,6 +864,86 @@ class App(QMainWindow):
         if self.idle_required() and self.selected_ids():
             self.process(self.selected_ids())
 
+    def open_markdown_preview(self, text):
+        try:
+            open_typeset(text)
+        except Exception:
+            QMessageBox.warning(self, '无法打开排版预览', '请检查默认浏览器和安装包中的离线公式组件。')
+
+    def fulltext_dialog(self):
+        ids = self.selected_ids()
+        if not ids or not self.idle_required():
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle('全文 Agent 分析')
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label(f'分析所选 {len(ids)} 篇文献的完整可提取正文', 'heading'))
+        layout.addWidget(label('正文将分段发送到设置中的模型接口，按“全文分析”问题生成总结。Agent 可回读关键段落。图片和扫描文字需要先转为文字；原总结会保存为历史版本。', 'muted', True))
+        reuse = QCheckBox('复用本地阅读笔记，减少调用（取消勾选则重新阅读全文）')
+        reuse.setChecked(True)
+        layout.addWidget(reuse)
+        layout.addWidget(label('问题、原文件或接口配置改变后会自动重读。可在设置中修改问题与调用次数上限。', 'muted', True))
+        layout.addWidget(button('开始全文分析', dialog.accept, 'primary'))
+        layout.addWidget(button('取消', dialog.reject))
+        dialog.resize(570, 270)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.process_fulltext(ids, reuse.isChecked())
+
+    def process_fulltext(self, ids, reuse=True):
+        self.busy = True
+        self.progress.setVisible(True)
+        self.add_button.setEnabled(False)
+        settings = self.library.settings()
+        self.show_detail()
+        def work():
+            failures = 0
+            for number, paper_id in enumerate(ids, 1):
+                paper = self.library.get(paper_id)
+                try:
+                    summary, info = analyze(paper['path'], settings, self.library.path.parent / 'analysis-cache', reuse,
+                        progress=lambda text: self.events.put(('status', f'{number}/{len(ids)} · {text}')))
+                    self.library.update(paper_id, summary=summary, analysis_info=json.dumps(info, ensure_ascii=False),
+                        basis=f'全文 Agent · {info["segments"]} 段 · {info["calls"]} 次调用 · 复用 {info["cached_notes"]} 条笔记',
+                        status='全文已分析', note='')
+                except Exception as exc:
+                    failures += 1
+                    reason = str(exc) if isinstance(exc, ValueError) else '全文分析失败，请检查原文件和模型接口；原总结已保留。'
+                    self.library.update(paper_id, status='全文分析失败', note=reason[:500])
+                self.events.put(('refresh', None))
+            self.events.put(('done', f'全文分析完成 · {len(ids)} 篇，{failures} 篇失败'))
+        threading.Thread(target=work, daemon=True).start()
+
+    def history_dialog(self):
+        paper = self.selected()
+        if not paper or not self.idle_required():
+            return
+        versions = self.library.summary_history(paper['id'])
+        dialog = QDialog(self)
+        dialog.setWindowTitle('总结历史版本')
+        dialog.resize(800, 650)
+        layout = QVBoxLayout(dialog)
+        selector = QComboBox()
+        for version in versions:
+            selector.addItem(f'{version["created"]} UTC · {version["basis"] or "总结"}', version['id'])
+        layout.addWidget(selector)
+        preview = markdown_view('暂无历史版本。替换或编辑总结时会自动保存旧版本。')
+        layout.addWidget(preview, 1)
+        from markdown_ui import markdown_html
+        def show_version():
+            if selector.currentIndex() >= 0:
+                preview.setHtml(markdown_html(versions[selector.currentIndex()]['summary']))
+        selector.currentIndexChanged.connect(show_version)
+        show_version()
+        def restore():
+            self.library.restore_summary(paper['id'], selector.currentData())
+            dialog.accept()
+            self.refresh()
+        control = button('恢复此版本（当前总结也会备份）', restore, 'primary')
+        control.setEnabled(bool(versions))
+        layout.addWidget(control)
+        layout.addWidget(button('关闭', dialog.reject))
+        dialog.exec()
+
     def process(self, ids, extract_first=False, end_only=False):
         self.busy = True
         self.progress.setVisible(True)
@@ -933,6 +1021,8 @@ class App(QMainWindow):
         opening.setEnabled(bool(self.selected()))
         menu.addAction('重新关联原文件', self.relink).setEnabled(bool(self.selected()))
         menu.addAction('读取所选结论（不调用模型）', self.read_selected_end).setEnabled(bool(self.selected()))
+        menu.addAction('全文 Agent 分析 / 再次分析', self.fulltext_dialog).setEnabled(bool(self.selected()))
+        menu.addAction('总结历史版本', self.history_dialog).setEnabled(bool(self.selected()))
         menu.addSeparator()
         menu.addAction('导出全部索引 JSON', self.export)
         menu.addAction('刷新文件状态', self.refresh)
@@ -1000,12 +1090,14 @@ class App(QMainWindow):
         tabs = QTabWidget()
         texts = {}
         for key, caption in [('abstract', '摘要'), ('introduction', '引言'), ('conclusion', '结论'), ('limitations', '局限'), ('summary', '总结'), ('description', '个人描述')]:
-            entry = QPlainTextEdit(paper[key])
+            entry = MarkdownEdit(paper[key])
             texts[key] = entry
             tabs.addTab(entry, caption)
         link_edit = QPlainTextEdit(links_text(paper.get('links')))
         link_edit.setPlaceholderText('每行一个：名称 | https://地址\n或：附件名称 | D:\\文献\\附件.pdf')
         tabs.addTab(link_edit, '关联链接')
+        layout.addWidget(editor_toolbar(tabs.currentWidget, lambda: self.open_markdown_preview(tabs.currentWidget().toPlainText())))
+        layout.addWidget(label('支持 Markdown、加粗、斜体及 $LaTeX$ / $$LaTeX$$。排版预览在默认浏览器中离线显示公式。', 'muted', True))
         layout.addWidget(tabs, 1)
         lock = QCheckBox('保留手动分类（再次整理时只更新总结，不覆盖分类）')
         lock.setChecked(bool(paper.get('category_locked')))
@@ -1030,6 +1122,7 @@ class App(QMainWindow):
                 value['end_note'] = '结论／局限由用户手动编辑'
             if value['summary'] != paper['summary']:
                 value['basis'] = '手动编辑'
+                value['analysis_info'] = '{}'
             self.library.update(paper['id'], **value, status='手动已编辑')
             dialog.accept()
             self.refresh()

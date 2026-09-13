@@ -8,7 +8,8 @@ FILES = ['app.py', 'library_core.py', 'platform_support.py', 'desktop_entry.py',
     'api_settings.py', 'paper_sections.py', 'paper_links.py', 'disk_catalog.py', 'folder_paths.py',
     'requirements.txt', 'requirements-build.txt', 'README.md', '.gitignore',
     'packaging/QUICK_START.md', 'packaging/build_release.py', 'packaging/stage_source.py',
-    '.github/workflows/desktop-build.yml', 'tests/test_packaging.py', 'tests/test_inline_folders.py']
+    '.github/workflows/desktop-build.yml', 'tests/test_packaging.py', 'tests/test_inline_folders.py',
+    'fulltext_agent.py', 'markdown_ui.py', 'tests/test_fulltext_agent.py', 'packaging/fetch_math_assets.py']
 
 
 if __name__ == '__main__':
@@ -19,4 +20,5 @@ if __name__ == '__main__':
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
+    shutil.copytree(ROOT / 'assets/katex', destination / 'assets/katex', dirs_exist_ok=True)
     print(f'Staged {len(FILES)} source and build files; no API configuration, database, papers or vendor folder.')

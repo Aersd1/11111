@@ -45,6 +45,15 @@ def main():
         index = BM25Index()
         index.update(window.library.all())
         assert index.search('battery', 10)
+        from markdown_ui import markdown_html, MarkdownEdit
+        from fulltext_agent import extract_full
+        assert 'battery' in extract_full(source)[0]
+        assert '$x_i$' in markdown_html('**bold** $x_i$')
+        assert (Path(__file__).resolve().parent / 'assets/katex/katex.min.js').is_file()
+        editor = MarkdownEdit('test')
+        editor.selectAll()
+        editor.wrap('**')
+        assert editor.toPlainText() == '**test**'
         window.show()
         application.processEvents()
         assert window.grab().save(str(root / 'smoke.png'))
