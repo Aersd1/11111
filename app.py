@@ -21,7 +21,7 @@ from paper_sections import extract_end
 from paper_links import parse_links, decode_links, links_text, open_link
 from folder_paths import parts, packed, ancestors, contains, ui_key
 from fulltext_agent import analyze
-from markdown_ui import MarkdownEdit, editor_toolbar, markdown_view, open_typeset
+from markdown_ui import MarkdownEdit, MarkdownPreview, editor_toolbar, markdown_view, open_typeset
 
 
 class PaperDelegate(QStyledItemDelegate):
@@ -920,13 +920,14 @@ class App(QMainWindow):
         versions = self.library.summary_history(paper['id'])
         dialog = QDialog(self)
         dialog.setWindowTitle('总结历史版本')
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.resize(800, 650)
         layout = QVBoxLayout(dialog)
         selector = QComboBox()
         for version in versions:
             selector.addItem(f'{version["created"]} UTC · {version["basis"] or "总结"}', version['id'])
         layout.addWidget(selector)
-        preview = markdown_view('暂无历史版本。替换或编辑总结时会自动保存旧版本。')
+        preview = MarkdownPreview('暂无历史版本。替换或编辑总结时会自动保存旧版本。')
         layout.addWidget(preview, 1)
         from markdown_ui import markdown_html
         def show_version():
@@ -1068,7 +1069,8 @@ class App(QMainWindow):
             return
         dialog = QDialog(self)
         dialog.setWindowTitle('编辑文献')
-        dialog.resize(820, 740)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.resize(1220, 850)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(25, 25, 25, 22)
         layout.addWidget(label('校正文献信息', 'heading'))
@@ -1097,8 +1099,29 @@ class App(QMainWindow):
         link_edit.setPlaceholderText('每行一个：名称 | https://地址\n或：附件名称 | D:\\文献\\附件.pdf')
         tabs.addTab(link_edit, '关联链接')
         layout.addWidget(editor_toolbar(tabs.currentWidget, lambda: self.open_markdown_preview(tabs.currentWidget().toPlainText())))
-        layout.addWidget(label('支持 Markdown、加粗、斜体及 $LaTeX$ / $$LaTeX$$。排版预览在默认浏览器中离线显示公式。', 'muted', True))
-        layout.addWidget(tabs, 1)
+        layout.addWidget(label('左侧编辑，右侧实时排版。公式使用 $...$ 或 $$...$$；Ctrl+B 加粗、Ctrl+I 斜体、Ctrl+K 插入链接。拖动中间分隔条调整宽度。', 'muted', True))
+        split = QSplitter(Qt.Orientation.Horizontal)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(label('编辑内容 · Markdown / LaTeX', 'eyebrow'))
+        left_layout.addWidget(tabs)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(label('实时预览 · 公式与链接', 'eyebrow'))
+        preview = MarkdownPreview(tabs.currentWidget().toPlainText())
+        right_layout.addWidget(preview)
+        split.addWidget(left)
+        split.addWidget(right)
+        split.setChildrenCollapsible(False)
+        split.setSizes([580, 580])
+        layout.addWidget(split, 1)
+        def refresh_preview():
+            preview.setMarkdown(tabs.currentWidget().toPlainText())
+        tabs.currentChanged.connect(refresh_preview)
+        for entry in [*texts.values(), link_edit]:
+            entry.textChanged.connect(refresh_preview)
         lock = QCheckBox('保留手动分类（再次整理时只更新总结，不覆盖分类）')
         lock.setChecked(bool(paper.get('category_locked')))
         layout.addWidget(lock)

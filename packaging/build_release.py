@@ -28,7 +28,7 @@ def main():
     OUT.mkdir(exist_ok=True)
     licenses = ROOT / 'build' / 'licenses'
     licenses.mkdir(parents=True, exist_ok=True)
-    for package in ('PySide6', 'PySide6_Essentials', 'shiboken6', 'pypdf'):
+    for package in ('PySide6', 'PySide6_Essentials', 'PySide6_Addons', 'shiboken6', 'pypdf'):
         dist = importlib.metadata.distribution(package)
         for file in dist.files or []:
             if 'license' in str(file).lower() or 'copying' in str(file).lower():
@@ -43,8 +43,7 @@ def main():
             '--paths', str(ROOT), '--add-data', f'{ROOT / "packaging" / "QUICK_START.md"}{os.pathsep}.',
             '--add-data', f'{licenses}{os.pathsep}licenses', '--hidden-import', 'pypdf',
             '--add-data', f'{ROOT / "assets" / "katex"}{os.pathsep}assets/katex',
-            '--hidden-import', 'agent_search', '--exclude-module', 'tkinter', '--exclude-module', 'PySide6.QtWebEngineCore',
-            '--exclude-module', 'PySide6.QtWebEngineWidgets', '--exclude-module', 'PySide6.QtQml',
+            '--hidden-import', 'agent_search', '--exclude-module', 'tkinter',
             '--exclude-module', 'numpy', '--exclude-module', 'PIL', '--exclude-module', 'psutil', '--exclude-module', 'fontTools']
     if (ROOT / '.vendor').is_dir():
         args += ['--paths', str(ROOT / '.vendor')]

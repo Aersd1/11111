@@ -1,15 +1,35 @@
-"""Markdown authoring in Qt, offline KaTeX formula typesetting in the system browser."""
+"""Markdown authoring and live, offline KaTeX rendering inside the desktop app."""
 import html
 import json
 from pathlib import Path
 import re
 import uuid
 import webbrowser
-from PySide6.QtCore import Qt
+import atexit
+from PySide6.QtCore import Qt, QUrl, QTimer, QCoreApplication
 from PySide6.QtGui import QTextDocument, QShortcut, QKeySequence
-from PySide6.QtWidgets import QPlainTextEdit, QTextBrowser, QHBoxLayout, QWidget
+from PySide6.QtWidgets import (QPlainTextEdit, QTextBrowser, QHBoxLayout, QWidget, QDialog, QVBoxLayout,
+    QFormLayout, QLineEdit, QFileDialog, QMessageBox, QApplication)
+QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from platform_support import data_root
 from ui_theme import button
+from paper_links import validate_target, open_link
+from urllib.parse import quote
+
+
+def _shutdown_previews():
+    # Dispose browser pages before QApplication/default-profile teardown.
+    from shiboken6 import delete, isValid
+    app = QApplication.instance()
+    if app is not None and isValid(app):
+        for widget in list(app.allWidgets()):
+            if isinstance(widget, QWebEngineView) and isValid(widget):
+                delete(widget)
+
+
+atexit.register(_shutdown_previews)
 
 
 def markdown_html(text):
@@ -55,6 +75,7 @@ class MarkdownEdit(QPlainTextEdit):
         self.setPlaceholderText('支持 Markdown：**加粗**、*斜体*、# 标题；LaTeX：$E=mc^2$ 或 $$\\frac{a}{b}$$')
         QShortcut(QKeySequence('Ctrl+B'), self, activated=lambda: self.wrap('**'))
         QShortcut(QKeySequence('Ctrl+I'), self, activated=lambda: self.wrap('*'))
+        QShortcut(QKeySequence('Ctrl+K'), self, activated=self.link_dialog)
 
     def wrap(self, marker):
         cursor = self.textCursor()
@@ -62,9 +83,50 @@ class MarkdownEdit(QPlainTextEdit):
         start = cursor.selectionStart()
         cursor.insertText(marker + value + marker)
         cursor.setPosition(start + len(marker))
-        cursor.setPosition(start + len(marker) + len(value), cursor.MoveMode.KeepAnchor)
+        cursor.setPosition(start + len(marker) + len(value.encode('utf-16-le')) // 2, cursor.MoveMode.KeepAnchor)
         self.setTextCursor(cursor)
         self.setFocus()
+
+    def insert_link(self, caption, target):
+        target = validate_target(target)
+        if Path(target).is_absolute():
+            target = Path(target).as_uri()
+        target = quote(target, safe=':/?#@!$&\'*,;=+%~')
+        caption = (caption.strip() or target).replace('\\', '\\\\').replace('[', '\\[').replace(']', '\\]').replace('\n', ' ')
+        self.textCursor().insertText(f'[{caption}](<{target}>)')
+        self.setFocus()
+
+    def link_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle('插入链接')
+        dialog.resize(540, 220)
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        caption = QLineEdit(self.textCursor().selectedText())
+        target = QLineEdit()
+        target.setPlaceholderText('https://网页地址 或本地文件路径')
+        form.addRow('显示文字', caption)
+        form.addRow('链接地址', target)
+        layout.addLayout(form)
+        def browse():
+            path, _ = QFileDialog.getOpenFileName(dialog, '选择关联文件')
+            if path:
+                target.setText(path)
+                if not caption.text(): caption.setText(Path(path).name)
+        layout.addWidget(button('选择本地文件…', browse, 'soft'))
+        def save():
+            try:
+                self.insert_link(caption.text(), target.text())
+            except ValueError as exc:
+                QMessageBox.warning(dialog, '链接格式错误', str(exc))
+                return
+            dialog.accept()
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(button('取消', dialog.reject))
+        row.addWidget(button('插入', save, 'primary'))
+        layout.addLayout(row)
+        dialog.exec()
 
 
 def editor_toolbar(current_editor, preview_callback=None):
@@ -73,17 +135,89 @@ def editor_toolbar(current_editor, preview_callback=None):
     row.setContentsMargins(0, 0, 0, 0)
     for text, marker in [('B 加粗', '**'), ('I 斜体', '*'), ('行内公式', '$'), ('独立公式', '$$')]:
         row.addWidget(button(text, lambda m=marker: current_editor().wrap(m) if isinstance(current_editor(), MarkdownEdit) else None, 'ghost'))
+    row.addWidget(button('插入链接', lambda: current_editor().link_dialog() if isinstance(current_editor(), MarkdownEdit) else None, 'soft'))
     if preview_callback:
         row.addWidget(button('排版预览', preview_callback, 'soft'))
     row.addStretch()
     return bar
 
 
+class PreviewPage(QWebEnginePage):
+    def acceptNavigationRequest(self, url, kind, main_frame):
+        if kind == self.NavigationType.NavigationTypeLinkClicked:
+            if url.hasFragment() and url.adjusted(QUrl.UrlFormattingOption.RemoveFragment) == self.url().adjusted(QUrl.UrlFormattingOption.RemoveFragment):
+                return True
+            try:
+                open_link(url.toString())
+            except (ValueError, OSError) as exc:
+                QMessageBox.warning(self.parent(), '无法打开链接', str(exc))
+            return False
+        return url.scheme() in ('data', 'about', 'file')
+
+
+class MarkdownPreview(QWebEngineView):
+    def __init__(self, text='', parent=None):
+        super().__init__(parent)
+        self.setPage(PreviewPage(self))
+        self.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
+        self.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+        self.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self._ready = False
+        self._html = ''
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(220)
+        self.timer.timeout.connect(self._render)
+        assets = Path(__file__).resolve().parent / 'assets/katex'
+        options = {'throwOnError': False, 'trust': False, 'maxExpand': 1000,
+            'delimiters': [{'left': '$$', 'right': '$$', 'display': True}, {'left': '$', 'right': '$', 'display': False},
+                           {'left': '\\[', 'right': '\\]', 'display': True}, {'left': '\\(', 'right': '\\)', 'display': False}]}
+        shell = '''<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src file: 'unsafe-inline'; style-src file: 'unsafe-inline'; font-src file: data:; img-src data:">
+<link rel="stylesheet" href="katex.min.css">
+<style>body{margin:0;padding:18px;color:#292a43;background:white;font:15px/1.8 'Segoe UI',sans-serif;overflow-wrap:anywhere}
+h1{font-size:1.6em}h2{font-size:1.3em}h3{font-size:1.1em}h1,h2,h3{line-height:1.5;margin:1em 0 .45em}
+p{margin:.65em 0}a{color:#7046d5;text-decoration:underline}table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #ddd;padding:6px}
+pre{white-space:pre-wrap;background:#f6f4fa;padding:12px;border-radius:8px}code{font-family:monospace}.katex{font-size:1.12em}.katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0}
+blockquote{border-left:3px solid #c9b8ee;margin-left:0;padding-left:14px;color:#646781}</style></head>
+<body><main id="content"></main><script src="katex.min.js"></script><script src="contrib/auto-render.min.js"></script><script>
+window.updatePreview=function(markup){const y=window.scrollY;const content=document.getElementById('content');content.innerHTML=markup;renderMathInElement(content,OPTIONS);window.scrollTo(0,y);};
+</script></body></html>'''.replace('OPTIONS', json.dumps(options))
+        self.loadFinished.connect(self._loaded)
+        super().setHtml(shell, QUrl.fromLocalFile(str(assets) + '/'))
+        self.setMarkdown(text)
+
+    def _loaded(self, ok):
+        self._ready = ok
+        if ok: self._render()
+
+    def setMarkdown(self, text):
+        self.setHtml(markdown_html(text))
+
+    def setHtml(self, markup, baseUrl=None):
+        match = re.search(r'<body[^>]*>([\s\S]*)</body>', markup)
+        self._html = match.group(1) if match else markup
+        self.timer.start()
+
+    def _render(self):
+        if self._ready:
+            self.page().runJavaScript('window.updatePreview(' + json.dumps(self._html) + ');')
+
+
 def markdown_view(text, minimum=160):
-    view = QTextBrowser()
-    view.setOpenLinks(False)
-    view.anchorClicked.connect(lambda url: webbrowser.open(url.toString()) if url.scheme() in ('http', 'https') else None)
-    view.setHtml(markdown_html(text))
+    if re.search(r'\$|\\\[|\\\(', text):
+        view = MarkdownPreview(text)
+    else:
+        view = QTextBrowser()
+        view.setOpenLinks(False)
+        def follow(url):
+            try:
+                open_link(url.toString())
+            except (ValueError, OSError) as exc:
+                QMessageBox.warning(view, '无法打开链接', str(exc))
+        view.anchorClicked.connect(follow)
+        view.setHtml(markdown_html(text))
+        view.setStyleSheet('QTextBrowser { background:white; border:none; padding:0; }')
     view.setMinimumHeight(minimum)
-    view.setStyleSheet('QTextBrowser { background:white; border:none; padding:0; }')
     return view

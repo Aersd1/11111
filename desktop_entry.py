@@ -11,6 +11,7 @@ def main():
         target.mkdir(parents=True, exist_ok=True)
         os.environ['LITERATURE_DATA_DIR'] = str(target)
         os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+        os.environ.setdefault('QTWEBENGINE_CHROMIUM_FLAGS', '--disable-gpu')
     from app import App
     from PySide6.QtCore import QLockFile
     from PySide6.QtWidgets import QApplication, QMessageBox
@@ -54,6 +55,20 @@ def main():
         editor.selectAll()
         editor.wrap('**')
         assert editor.toPlainText() == '**test**'
+        from markdown_ui import MarkdownPreview
+        import time
+        preview = MarkdownPreview('**Formula** $$\\frac{a}{b}$$')
+        preview.show()
+        rendered = []
+        deadline = time.monotonic() + 25
+        while not any(rendered) and time.monotonic() < deadline:
+            preview.page().runJavaScript('document.querySelectorAll(".katex").length === 1', lambda value: rendered.append(bool(value)))
+            for _ in range(10):
+                application.processEvents()
+                time.sleep(.02)
+        assert any(rendered), 'Packaged offline formula renderer failed'
+        preview.close()
+        preview.deleteLater()
         window.show()
         application.processEvents()
         assert window.grab().save(str(root / 'smoke.png'))

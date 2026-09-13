@@ -148,6 +148,8 @@ class FulltextTests(unittest.TestCase):
         self.assertEqual(lib.get(ident)['minor'], 'A/B')
         self.assertEqual(lib.summary_history(ident)[0]['summary'], 'original')
         window.close()
+        window.deleteLater()
+        QAPP.processEvents()
 
     def test_settings_custom_questions_persist(self):
         from ui_settings import SettingsDialog
