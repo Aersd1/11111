@@ -101,4 +101,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "更新文献分析：普通整理综合引言、结论和局限，改进 PDF 提取复用及批量整理，设置增加受支持模型的思考开关；支持流式模型响应，改进超时、异常响应与输出截断提示；全文阅读支持受调用预算限制的重试，保留已完成的阅读笔记及原有总结。保留 Markdown / LaTeX 实时预览和链接编辑。Windows 解压运行 EXE；Mac 打开 DMG；Linux 解压运行，无需配置 Python 环境。"
+        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "全文分析改为一次提交完整可提取正文，逐题回答预设问题和补充问题，不再分段生成笔记或回读。支持每篇保存补充问题及批次追加；正文、问题和接口配置未变时可复用完整回答。失败不自动重复请求，保留原总结与历史记录。保留 Markdown / LaTeX 实时预览和目录管理。Windows 解压运行 EXE；Mac 打开 DMG；Linux 解压运行，无需配置 Python 环境。"

@@ -56,7 +56,8 @@ class Library:
             for name, definition in {'conclusion': "TEXT DEFAULT ''", 'limitations': "TEXT DEFAULT ''",
                     'description': "TEXT DEFAULT ''", 'links': "TEXT DEFAULT '[]'",
                     'category_locked': 'INTEGER DEFAULT 0', 'end_checked': 'INTEGER DEFAULT 0',
-                    'end_note': "TEXT DEFAULT ''", 'analysis_info': "TEXT DEFAULT '{}'"}.items():
+                    'end_note': "TEXT DEFAULT ''", 'analysis_info': "TEXT DEFAULT '{}'",
+                    'analysis_extra_questions': "TEXT DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f'ALTER TABLE papers ADD COLUMN {name} {definition}')
             db.execute('CREATE TABLE IF NOT EXISTS categories (major TEXT NOT NULL, minor TEXT NOT NULL DEFAULT "", PRIMARY KEY(major,minor))')
@@ -104,7 +105,7 @@ class Library:
 
     def update(self, paper_id, **fields):
         allowed = {'path', 'title', 'abstract', 'keywords', 'introduction', 'major', 'minor', 'summary', 'basis', 'status', 'note'}
-        allowed.update({'conclusion', 'limitations', 'description', 'links', 'category_locked', 'end_checked', 'end_note', 'analysis_info'})
+        allowed.update({'conclusion', 'limitations', 'description', 'links', 'category_locked', 'end_checked', 'end_note', 'analysis_info', 'analysis_extra_questions'})
         if not fields or not set(fields) <= allowed:
             raise ValueError('无效字段')
         with self.connect() as db:

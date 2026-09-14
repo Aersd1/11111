@@ -20,7 +20,7 @@ from ui_drag import PaperTable, PAPER_MIME
 from paper_sections import extract_end
 from paper_links import parse_links, decode_links, links_text, open_link
 from folder_paths import parts, packed, ancestors, contains, ui_key
-from fulltext_agent import analyze
+from fulltext_agent import analyze, combined_questions, questions_from, QUESTIONS
 from model_response import ModelResponseError
 from markdown_ui import MarkdownEdit, MarkdownPreview, editor_toolbar, markdown_view, open_typeset
 
@@ -894,18 +894,36 @@ class App(QMainWindow):
         dialog.setWindowTitle('全文 Agent 分析')
         layout = QVBoxLayout(dialog)
         layout.addWidget(label(f'分析所选 {len(ids)} 篇文献的完整可提取正文', 'heading'))
-        layout.addWidget(label('正文将分段发送到设置中的模型接口，按“全文分析”问题生成总结。Agent 可回读关键段落。图片和扫描文字需要先转为文字；原总结会保存为历史版本。', 'muted', True))
-        reuse = QCheckBox('复用本地阅读笔记，减少调用（取消勾选则重新阅读全文）')
+        layout.addWidget(label('每篇一次提交完整可提取正文，只回答预设问题和补充问题，不再逐段生成笔记或回读。原总结会保存为历史版本。若全文超出模型上下文，需更换支持长文的模型。', 'muted', True))
+        layout.addWidget(label('补充问题 · 每行一个（最多 30 行）' if len(ids) == 1 else '本批次补充问题 · 追加到各篇已保存的问题', 'sectionTitle'))
+        extra = QPlainTextEdit()
+        extra.setPlaceholderText('例如：这篇论文的方法如何用于我的数据？\n实验中最重要的对照是什么？')
+        if len(ids) == 1:
+            extra.setPlainText(self.library.get(ids[0]).get('analysis_extra_questions') or '')
+        layout.addWidget(extra)
+        reuse = QCheckBox('问题、正文及配置未变时复用已完成的回答（不发请求）')
         reuse.setChecked(True)
         layout.addWidget(reuse)
-        layout.addWidget(label('问题、原文件或接口配置改变后会自动重读。可在设置中修改问题与调用次数上限。', 'muted', True))
-        layout.addWidget(button('开始全文分析', dialog.accept, 'primary'))
+        layout.addWidget(label('预设问题在“设置 → 全文分析”修改；每篇补充问题也可在“编辑文献 → 补充问题”修改。思考模式沿用设置。', 'muted', True))
+        def start():
+            try:
+                preset = self.library.settings().get('analysis_questions', '\n'.join(QUESTIONS))
+                for ident in ids:
+                    saved = self.library.get(ident).get('analysis_extra_questions') or ''
+                    combined_questions(preset, extra.toPlainText() if len(ids) == 1 else saved + '\n' + extra.toPlainText())
+            except ValueError as exc:
+                QMessageBox.warning(dialog, '补充问题格式错误', str(exc))
+                return
+            dialog.accept()
+        layout.addWidget(button('开始全文分析', start, 'primary'))
         layout.addWidget(button('取消', dialog.reject))
-        dialog.resize(570, 270)
+        dialog.resize(640, 510)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.process_fulltext(ids, reuse.isChecked())
+            if len(ids) == 1:
+                self.library.update(ids[0], analysis_extra_questions=extra.toPlainText().strip())
+            self.process_fulltext(ids, reuse.isChecked(), extra.toPlainText().strip() if len(ids) > 1 else '')
 
-    def process_fulltext(self, ids, reuse=True):
+    def process_fulltext(self, ids, reuse=True, extra_questions=''):
         self.busy = True
         self.progress.setVisible(True)
         self.add_button.setEnabled(False)
@@ -917,9 +935,10 @@ class App(QMainWindow):
                 paper = self.library.get(paper_id)
                 try:
                     summary, info = analyze(paper['path'], settings, self.library.path.parent / 'analysis-cache', reuse,
-                        progress=lambda text: self.events.put(('status', f'{number}/{len(ids)} · {text}')))
+                        progress=lambda text: self.events.put(('status', f'{number}/{len(ids)} · {text}')),
+                        supplementary_questions=(paper.get('analysis_extra_questions') or '') + '\n' + extra_questions)
                     self.library.update(paper_id, summary=summary, analysis_info=json.dumps(info, ensure_ascii=False),
-                        basis=f'全文 Agent · {info["segments"]} 段 · {info["calls"]} 次调用 · 复用 {info["cached_notes"]} 条笔记',
+                        basis=f'全文问答 · {len(info["questions"])} 个问题 · {info["calls"]} 次调用' + (' · 复用完整回答' if info.get('cached_result') else ''),
                         status='全文已分析', note='')
                 except Exception as exc:
                     failures += 1
@@ -1121,7 +1140,7 @@ class App(QMainWindow):
         layout.addLayout(form)
         tabs = QTabWidget()
         texts = {}
-        for key, caption in [('abstract', '摘要'), ('introduction', '引言'), ('conclusion', '结论'), ('limitations', '局限'), ('summary', '总结'), ('description', '个人描述')]:
+        for key, caption in [('abstract', '摘要'), ('introduction', '引言'), ('conclusion', '结论'), ('limitations', '局限'), ('summary', '总结'), ('analysis_extra_questions', '补充问题'), ('description', '个人描述')]:
             entry = MarkdownEdit(paper[key])
             texts[key] = entry
             tabs.addTab(entry, caption)
@@ -1165,9 +1184,11 @@ class App(QMainWindow):
                 return
             value.update({k: v.toPlainText().strip() for k, v in texts.items()})
             try:
+                if value['analysis_extra_questions']:
+                    questions_from(value['analysis_extra_questions'])
                 value['links'] = parse_links(link_edit.toPlainText())
             except ValueError as exc:
-                QMessageBox.warning(dialog, '链接格式错误', str(exc))
+                QMessageBox.warning(dialog, '内容格式错误', str(exc))
                 return
             value['category_locked'] = int(lock.isChecked() or value['major'] != paper['major'] or value['minor'] != paper['minor'])
             if value['conclusion'] != paper.get('conclusion') or value['limitations'] != paper.get('limitations'):

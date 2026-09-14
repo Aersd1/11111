@@ -26,6 +26,29 @@ QAPP.setStyleSheet(STYLE)
 
 
 class UITests(unittest.TestCase):
+    def test_fulltext_dialog_saves_supplementary_questions(self):
+        from PySide6.QtWidgets import QPlainTextEdit
+        ident = self.window.selected_ids()[0]
+        self.lib.update(ident, analysis_extra_questions='已有问题？')
+        errors = []
+        def edit():
+            dialog = QApplication.activeModalWidget()
+            try:
+                entry = dialog.findChild(QPlainTextEdit)
+                self.assertEqual(entry.toPlainText(), '已有问题？')
+                entry.setPlainText('新的补充问题？')
+                next(b for b in dialog.findChildren(QPushButton) if b.text() == '开始全文分析').click()
+            except Exception as exc:
+                errors.append(exc)
+                dialog.reject()
+        with patch.object(self.window, 'process_fulltext') as run:
+            QTimer.singleShot(0, edit)
+            self.window.fulltext_dialog()
+        if errors:
+            raise errors[0]
+        self.assertEqual(self.lib.get(ident)['analysis_extra_questions'], '新的补充问题？')
+        run.assert_called_once_with([ident], True, '')
+
     def test_batch_model_requests_overlap_and_one_failure_preserves_summary(self):
         self.lib.save_settings({**self.lib.settings(), 'mode': '大模型'})
         ids = self.ids[:3]
@@ -492,6 +515,7 @@ class UITests(unittest.TestCase):
             by_label = {tabs.tabText(i): tabs.widget(i) for i in range(tabs.count())}
             by_label['个人描述'].setPlainText('用于微电网能耗预测的参考论文')
             by_label['结论'].setPlainText('只在一个数据集上验证。')
+            by_label['补充问题'].setPlainText('适合迁移到我的数据集吗？')
             by_label['关联链接'].setPlainText('补充数据 | https://example.invalid/dataset')
             save = next(b for b in dialog.findChildren(QPushButton) if b.text() == '保存修改')
             save.click()
@@ -500,6 +524,7 @@ class UITests(unittest.TestCase):
         paper = self.lib.get(paper_id)
         self.assertIn('微电网', paper['description'])
         self.assertEqual(paper['conclusion'], '只在一个数据集上验证。')
+        self.assertEqual(paper['analysis_extra_questions'], '适合迁移到我的数据集吗？')
         self.assertEqual(json.loads(paper['links'])[0]['label'], '补充数据')
         self.assertEqual(paper['end_checked'], 1)
 

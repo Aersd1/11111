@@ -31,89 +31,85 @@ class FulltextTests(unittest.TestCase):
 
     def caller(self, config, instruction, payload, maximum):
         self.calls.append(payload)
-        if 'segment' in payload or ('evidence' in payload and 'coverage' not in payload):
-            return {'notes': 'experimental evidence [段 1]'}, 10
-        return {'summary': '## 问题\n**答案** $x_i^2$', 'read_again': [1] if 'reread' not in payload else []}, 20
+        return {'answers': [{'id': q['id'], 'answer': '证据支持的答案 $x_i^2$'} for q in payload['questions']],
+                'read_again': [1]}, 20
 
-    def run_analysis(self, reuse=True):
-        return analyze(self.source, self.settings, self.root / 'cache', reuse, caller=self.caller)
+    def run_analysis(self, reuse=True, extra=''):
+        return analyze(self.source, self.settings, self.root / 'cache', reuse,
+                       caller=self.caller, supplementary_questions=extra)
 
-    def test_complete_text_reread_and_reuse(self):
+    def test_full_text_is_sent_once_without_reread_and_result_is_reused(self):
         summary, info = self.run_analysis()
-        read = [c['text'] for c in self.calls if 'segment' in c]
-        self.assertEqual(''.join(read), self.source.read_text('utf-8'))
-        self.assertIn('END OF PAPER', read[-1])
-        self.assertEqual(info['reread'], [1])
-        self.assertTrue(any('reread' in c for c in self.calls))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]['full_text'], self.source.read_text('utf-8'))
+        self.assertIn('END OF PAPER', self.calls[0]['full_text'])
+        self.assertEqual(info['calls'], 1)
         self.assertIn('$x_i^2$', summary)
         self.calls.clear()
-        _, second = self.run_analysis()
-        self.assertEqual(second['cached_notes'], info['segments'])
-        self.assertEqual(second['calls'], 2)
-        self.assertFalse(any('segment' in c for c in self.calls))
-        self.calls.clear()
+        same, cached = self.run_analysis()
+        self.assertEqual(same, summary)
+        self.assertTrue(cached['cached_result'])
+        self.assertEqual(cached['calls'], 0)
+        self.assertEqual(self.calls, [])
         self.run_analysis(False)
-        self.assertTrue(any('segment' in c for c in self.calls))
+        self.assertEqual(len(self.calls), 1)
 
-    def test_questions_and_source_invalidate_cache(self):
+    def test_questions_source_and_model_config_invalidate_cache(self):
         self.run_analysis()
         self.settings['analysis_questions'] = '实验局限是什么？'
         _, info = self.run_analysis()
-        self.assertEqual(info['cached_notes'], 0)
+        self.assertFalse(info['cached_result'])
         self.source.write_text('new contents', 'utf-8')
         _, info = self.run_analysis()
-        self.assertEqual(info['cached_notes'], 0)
+        self.assertFalse(info['cached_result'])
+        Path(self.settings['api_config']).write_text('{"model":"changed"}', 'utf-8')
+        _, info = self.run_analysis()
+        self.assertFalse(info['cached_result'])
         self.assertEqual(info['questions'], ['实验局限是什么？'])
-        self.assertEqual(len(QUESTIONS), 10)
         with self.assertRaises(ValueError):
             questions_from('')
 
-    def test_failed_segment_can_resume_from_cached_notes(self):
-        def failing(config, instruction, payload, maximum):
-            if payload.get('segment') == 2:
-                raise ModelResponseError('模型接口等待超过 180 秒')
-            return self.caller(config, instruction, payload, maximum)
-        with self.assertRaisesRegex(ModelResponseError, '第 2/3 段'):
-            analyze(self.source, self.settings, self.root / 'cache', caller=failing)
+    def test_supplementary_questions_are_deduplicated_and_invalidate_cache(self):
+        _, info = self.run_analysis(extra=QUESTIONS[0] + '\n适用于我的实验吗？')
+        self.assertEqual(len(info['questions']), len(QUESTIONS) + 1)
+        self.assertEqual(info['questions'][-1], '适用于我的实验吗？')
+        self.assertEqual(len(self.calls), 1)
+        _, changed = self.run_analysis(extra='还有其他证据吗？')
+        self.assertFalse(changed['cached_result'])
+        with self.assertRaises(ValueError):
+            self.run_analysis(extra='x' * 6001)
+
+    def test_transient_errors_do_not_repeat_requests(self):
+        from unittest.mock import Mock
+        caller = Mock(side_effect=ModelResponseError('暂时断连', retryable=True))
+        with self.assertRaisesRegex(ModelResponseError, '不自动重复请求'):
+            analyze(self.source, self.settings, self.root / 'cache', caller=caller)
+        self.assertEqual(caller.call_count, 1)
+        self.assertFalse(list((self.root / 'cache').rglob('answers.json')))
+
+    def test_missing_answers_are_not_saved_or_retried(self):
+        from unittest.mock import Mock
+        caller = Mock(return_value=({'answers': [{'id': 1, 'answer': 'partial'}]}, 10))
+        with self.assertRaisesRegex(ValueError, '未回答全部问题'):
+            analyze(self.source, self.settings, self.root / 'cache', caller=caller)
+        self.assertEqual(caller.call_count, 1)
+        self.assertFalse(list((self.root / 'cache').rglob('answers.json')))
+
+    def test_long_document_never_splits_or_truncates(self):
+        self.source.write_text('a' * 250000 + ' LAST PAGE', 'utf-8')
+        self.settings['analysis_max_calls'] = 1
+        _, info = self.run_analysis()
+        self.assertEqual(info['calls'], 1)
+        self.assertEqual(self.calls[0]['full_text'], self.source.read_text('utf-8'))
+
+    def test_invalid_cache_is_replaced_by_one_complete_request(self):
+        self.run_analysis()
+        cache = next((self.root / 'cache').rglob('answers.json'))
+        cache.write_text('{"answers":[]}', 'utf-8')
         self.calls.clear()
         _, info = self.run_analysis()
-        self.assertEqual(info['cached_notes'], 1)
-        self.assertEqual([p['segment'] for p in self.calls if 'segment' in p], [2, 3])
-
-    def test_transient_retry_counts_against_budget(self):
-        attempts = []
-        def transient(config, instruction, payload, maximum):
-            attempts.append(payload)
-            if len(attempts) == 1:
-                raise ModelResponseError('暂时断连', retryable=True)
-            return self.caller(config, instruction, payload, maximum)
-        with patch('fulltext_agent.time.sleep'):
-            _, info = analyze(self.source, self.settings, self.root / 'cache', caller=transient)
-        self.assertEqual(info['calls'], len(attempts))
-        self.assertEqual(len(attempts), 6)
-        self.assertEqual(attempts[0], attempts[1])
-
-    def test_retries_never_exceed_budget(self):
-        self.source.write_text('evidence', 'utf-8')
-        self.settings['analysis_max_calls'] = 3
-        with patch('fulltext_agent.time.sleep'), patch('agent_search.model_json') as caller:
-            caller.side_effect = ModelResponseError('暂时断连', retryable=True)
-            with self.assertRaises(ModelResponseError):
-                analyze(self.source, self.settings, self.root / 'cache', caller=caller)
-        self.assertEqual(caller.call_count, 3)
-
-    def test_budget_rejects_without_sending_any_text(self):
-        self.settings['analysis_max_calls'] = 2
-        with self.assertRaisesRegex(ValueError, '未向模型发送'):
-            self.run_analysis()
-        self.assertFalse(self.calls)
-
-    def test_hierarchical_reduction_reads_every_segment(self):
-        self.source.write_text('a' * 85000, 'utf-8')
-        _, info = self.run_analysis()
-        self.assertEqual(info['segments'], 8)
-        self.assertEqual(len([p for p in self.calls if 'segment' in p]), 8)
-        self.assertEqual(len([p for p in self.calls if 'evidence' in p and 'coverage' not in p]), 2)
+        self.assertEqual(info['calls'], 1)
+        self.assertEqual(len(self.calls), 1)
 
     def test_pdf_reads_all_pages_and_reports_missing_text(self):
         from types import SimpleNamespace
@@ -162,7 +158,8 @@ class FulltextTests(unittest.TestCase):
         from app import App
         lib = Library(self.root / 'library.sqlite3')
         ident, _ = lib.add(self.source)
-        lib.update(ident, summary='original', major='Research', minor='A/B', category_locked=1)
+        lib.update(ident, summary='original', major='Research', minor='A/B', category_locked=1,
+                   analysis_extra_questions='适用于我的实验吗？', description='PRIVATE NOTE')
         window = App(lib)
         def wait():
             deadline = time.monotonic() + 5
@@ -176,10 +173,13 @@ class FulltextTests(unittest.TestCase):
             wait()
         self.assertEqual(lib.get(ident)['summary'], 'original')
         self.assertIn('第 2/3 段', lib.get(ident)['note'])
-        info = {'segments': 3, 'calls': 4, 'cached_notes': 0}
-        with patch('app.analyze', return_value=('new summary', info)):
+        info = {'questions': QUESTIONS, 'calls': 1, 'cached_result': False}
+        with patch('app.analyze', return_value=('new summary', info)) as call:
             window.process_fulltext([ident])
             wait()
+        self.assertEqual(call.call_args.kwargs['supplementary_questions'].strip(), '适用于我的实验吗？')
+        self.assertNotIn('PRIVATE NOTE', repr(call.call_args))
+        self.assertEqual(lib.get(ident)['analysis_extra_questions'], '适用于我的实验吗？')
         self.assertEqual(lib.get(ident)['summary'], 'new summary')
         self.assertEqual(lib.get(ident)['minor'], 'A/B')
         self.assertEqual(lib.summary_history(ident)[0]['summary'], 'original')
@@ -193,10 +193,8 @@ class FulltextTests(unittest.TestCase):
         lib.save_settings({**lib.settings(), **self.settings})
         dialog = SettingsDialog(lib)
         dialog.analysis_questions.setPlainText('什么问题？\n什么局限？')
-        dialog.analysis_max_calls.setValue(24)
         dialog.save_and_use()
         self.assertEqual(lib.settings()['analysis_questions'], '什么问题？\n什么局限？')
-        self.assertEqual(lib.settings()['analysis_max_calls'], 24)
 
     def test_settings_thinking_defaults_on_and_persists_off(self):
         from ui_settings import SettingsDialog
