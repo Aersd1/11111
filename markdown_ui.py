@@ -6,6 +6,9 @@ import re
 import uuid
 import webbrowser
 import atexit
+import os
+# Text and math previews need no GPU; software composition also works on CI and VMs.
+os.environ.setdefault('QT_QUICK_BACKEND', 'software')
 from PySide6.QtCore import Qt, QUrl, QTimer, QCoreApplication
 from PySide6.QtGui import QTextDocument, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QPlainTextEdit, QTextBrowser, QHBoxLayout, QWidget, QDialog, QVBoxLayout,

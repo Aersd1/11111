@@ -9,7 +9,7 @@ FILES = ['app.py', 'library_core.py', 'platform_support.py', 'desktop_entry.py',
     'requirements.txt', 'requirements-build.txt', 'README.md', '.gitignore',
     'packaging/QUICK_START.md', 'packaging/build_release.py', 'packaging/stage_source.py',
     '.github/workflows/desktop-build.yml', 'tests/test_packaging.py', 'tests/test_inline_folders.py',
-    'fulltext_agent.py', 'markdown_ui.py', 'tests/test_fulltext_agent.py', 'tests/test_live_markdown.py', 'packaging/fetch_math_assets.py']
+    'fulltext_agent.py', 'markdown_ui.py', 'tests/test_fulltext_agent.py', 'tests/test_live_markdown.py', 'packaging/fetch_math_assets.py', 'packaging/check_graphics.py']
 
 
 if __name__ == '__main__':
