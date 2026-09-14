@@ -135,6 +135,7 @@ class LibraryTests(unittest.TestCase):
     def test_open_custom_uses_argument_array_and_missing_file_reports(self):
         exe = self.root / 'reader with spaces.exe'
         exe.touch()
+        exe.chmod(0o700)
         settings = {**DEFAULT_SETTINGS, 'opener': '指定程序', 'program': str(exe)}
         with patch('library_core.subprocess.Popen') as process:
             open_paper(self.source, settings)
