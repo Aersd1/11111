@@ -86,8 +86,12 @@ class SettingsDialog(QDialog):
         self.maximum.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         fields.addRow('Temperature', self.temperature)
         fields.addRow('Max tokens', self.maximum)
+        self.enable_thinking = QCheckBox('启用思考（默认开启）')
+        self.enable_thinking.setChecked(True)
+        self.enable_thinking.setToolTip('对普通整理、全文分析和智能检索生效。当前支持国家超算互联网的 DeepSeek-V4 / Qwen3；其他接口沿用服务端行为。关闭可减少生成等待。')
+        fields.addRow('思考模式', self.enable_thinking)
         form.addLayout(fields)
-        form.addWidget(label('支持 OpenAI 兼容接口。填写 Base URL，无需添加 /chat/completions。\n整理使用非流式请求，单次输出最多 4000 tokens；其他已有配置字段会保留。', 'muted', True))
+        form.addWidget(label('支持 OpenAI 兼容接口。填写 Base URL，无需添加 /chat/completions。\n整理使用流式接收，单次输出最多 16384 tokens；其他已有配置字段会保留。', 'muted', True))
         testrow = QHBoxLayout()
         self.test_button = button('测试当前配置', self.test_connection, 'soft', 'spark')
         testrow.addWidget(self.test_button)
@@ -119,7 +123,7 @@ class SettingsDialog(QDialog):
         prefs.addRow('默认打开方式', self.opener)
         prefs.addRow('指定阅读程序', program_row)
         general_layout.addLayout(prefs)
-        general_layout.addWidget(label('添加文件后按默认方式整理。手动与本地规则模式不联网，使用原文摘录。\n\n大模型读取题目、摘要、关键词、结论和局限段；无法确定分类时才补充引言前两段。原文件不上传，个人描述和链接不发送给模型。', 'muted', True))
+        general_layout.addWidget(label('添加文件后按默认方式整理。手动与本地规则模式不联网，使用原文摘录。\n\n大模型首次整理即综合题目、摘要、关键词、引言前两段、结论和局限段，一次请求完成。原文件不上传，个人描述和链接不发送给模型。', 'muted', True))
         general_layout.addStretch()
         self.tabs.addTab(general, '阅读与整理')
         analysis_page = QWidget()
@@ -158,6 +162,7 @@ class SettingsDialog(QDialog):
             field.textChanged.connect(self.mark_api)
         self.temperature.valueChanged.connect(self.mark_api)
         self.maximum.valueChanged.connect(self.mark_api)
+        self.enable_thinking.toggled.connect(self.mark_api)
         for field in (self.mode, self.opener):
             field.currentTextChanged.connect(self.mark_dirty)
         self.program.textChanged.connect(self.mark_dirty)
@@ -193,12 +198,14 @@ class SettingsDialog(QDialog):
         self.model.setText(cfg.get('model', ''))
         self.maximum.setValue(cfg.get('max_tokens', 2500))
         self.temperature.setValue(cfg.get('temperature', 0.2))
+        self.enable_thinking.setChecked(cfg.get('enable_thinking', True))
         self.loading = before
 
     def candidate(self):
         document = copy.deepcopy(self.document)
         document['OpenAI'].update(base_url=self.base_url.text().strip().rstrip('/'), api_key=self.api_key.text().strip(),
-                                  model=self.model.text().strip(), temperature=self.temperature.value(), max_tokens=self.maximum.value())
+                                  model=self.model.text().strip(), temperature=self.temperature.value(), max_tokens=self.maximum.value(),
+                                  enable_thinking=self.enable_thinking.isChecked())
         return validate_config(document)
 
     def discard_api(self):
@@ -289,7 +296,7 @@ class SettingsDialog(QDialog):
         self.testing = True
         self.test_button.setEnabled(False)
         self.test_button.setText('正在测试…')
-        self.api_status.setText('使用一段测试摘要请求当前模型，最长等待 90 秒。')
+        self.api_status.setText('使用一段测试摘要请求当前模型，连接或连续无数据时最长等待 180 秒，临时网络错误最多重试两次。')
         def work():
             try:
                 call_model_config(document, {'title': 'Document classification using language models',

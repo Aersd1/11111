@@ -75,7 +75,51 @@ def parse_end_sections(text):
 
 
 def extract_end(path):
+    if Path(path).suffix.lower() == '.pdf':
+        return extract_pdf_parts(path)[2]
     text, source = end_text(path)
     result = parse_end_sections(text)
     recognized = '、'.join(label for key, label in [('conclusion', '结论'), ('limitations', '局限')] if result[key])
     return {**result, 'end_checked': 1, 'end_note': source + ('；已提取' + recognized if recognized else '；未识别结论／局限标题，可手动补充')}
+
+
+def extract_pdf_parts(path):
+    """Share a reader/page cache and search the middle only for missing sections."""
+    from pypdf import PdfReader
+    reader = PdfReader(path)
+    count = len(reader.pages)
+    cache = {}
+    def page(index):
+        if index not in cache:
+            cache[index] = reader.pages[index].extract_text() or ''
+        return cache[index]
+    front_end = min(4, count)
+    front = '\n\n'.join(page(i) for i in range(front_end))
+    meta = reader.metadata
+    title = str(meta.title or '') if meta else ''
+    if title.lower().endswith(('.doc', '.docx', '.pdf')):
+        title = ''
+    result = {'conclusion': '', 'limitations': ''}
+    try:
+        tail_start = max(0, count - 12)
+        tail = '\n\n'.join(page(i) for i in range(tail_start, count))
+        # Join only contiguous pages. A gap could otherwise attach unrelated
+        # appendix text to a conclusion started in the front matter.
+        if tail_start <= front_end:
+            result = parse_end_sections('\n\n'.join(page(i) for i in range(count)))
+        else:
+            result = parse_end_sections(front)
+            tail_result = parse_end_sections(tail)
+            result.update({k: v for k, v in tail_result.items() if v})
+            if not all(result.values()):
+                # Conclusions can precede a long appendix and lie outside the
+                # last twelve pages. Reuse cached pages when filling that gap.
+                complete = '\n\n'.join(page(i) for i in range(count))
+                result = parse_end_sections(complete)
+        missing = '、'.join(label for key, label in [('conclusion', '结论'), ('limitations', '局限')] if not result[key])
+        note = f'PDF 已检查 {len(cache)}/{count} 页；页面解析结果复用'
+        if missing:
+            note += '；未识别' + missing + '标题，可手动补充'
+        return front, title, {**result, 'end_checked': 1, 'end_note': note}
+    except Exception:
+        return front, title, {**result, 'end_checked': 1, 'end_note': '结论／局限读取不完整，可重新读取或手动补充。'}

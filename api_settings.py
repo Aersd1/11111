@@ -14,6 +14,8 @@ def validate_config(document):
     if not isinstance(document, dict) or not isinstance(document.get('OpenAI'), dict):
         raise ValueError('配置需要包含 OpenAI 对象。')
     cfg = document['OpenAI']
+    if not isinstance(cfg.get('enable_thinking', True), bool):
+        raise ValueError('enable_thinking 必须是 true 或 false。')
     for key, label in [('base_url', '接口地址'), ('api_key', 'API Key'), ('model', '模型名称')]:
         if not isinstance(cfg.get(key), str) or not cfg[key].strip():
             raise ValueError(f'请填写{label}。')
@@ -29,6 +31,13 @@ def validate_config(document):
     if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or not 0 <= temperature <= 2:
         raise ValueError('temperature 必须在 0–2 之间。')
     return copy.deepcopy(document)
+
+
+def thinking_options(cfg):
+    """Only emit a thinking switch for an endpoint/model with a known contract."""
+    if urlsplit(cfg['base_url']).hostname == 'api.scnet.cn' and cfg['model'].lower().startswith(('deepseek-v4', 'qwen3')):
+        return {'enable_thinking': cfg.get('enable_thinking', True)}
+    return {}
 
 
 def read_config(path):

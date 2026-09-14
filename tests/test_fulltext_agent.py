@@ -8,6 +8,7 @@ from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from library_core import Library
 from fulltext_agent import analyze, extract_full, QUESTIONS, questions_from
+from model_response import ModelResponseError
 from markdown_ui import MarkdownEdit, markdown_html, open_typeset
 from PySide6.QtWidgets import QApplication
 
@@ -66,6 +67,40 @@ class FulltextTests(unittest.TestCase):
         self.assertEqual(len(QUESTIONS), 10)
         with self.assertRaises(ValueError):
             questions_from('')
+
+    def test_failed_segment_can_resume_from_cached_notes(self):
+        def failing(config, instruction, payload, maximum):
+            if payload.get('segment') == 2:
+                raise ModelResponseError('模型接口等待超过 180 秒')
+            return self.caller(config, instruction, payload, maximum)
+        with self.assertRaisesRegex(ModelResponseError, '第 2/3 段'):
+            analyze(self.source, self.settings, self.root / 'cache', caller=failing)
+        self.calls.clear()
+        _, info = self.run_analysis()
+        self.assertEqual(info['cached_notes'], 1)
+        self.assertEqual([p['segment'] for p in self.calls if 'segment' in p], [2, 3])
+
+    def test_transient_retry_counts_against_budget(self):
+        attempts = []
+        def transient(config, instruction, payload, maximum):
+            attempts.append(payload)
+            if len(attempts) == 1:
+                raise ModelResponseError('暂时断连', retryable=True)
+            return self.caller(config, instruction, payload, maximum)
+        with patch('fulltext_agent.time.sleep'):
+            _, info = analyze(self.source, self.settings, self.root / 'cache', caller=transient)
+        self.assertEqual(info['calls'], len(attempts))
+        self.assertEqual(len(attempts), 6)
+        self.assertEqual(attempts[0], attempts[1])
+
+    def test_retries_never_exceed_budget(self):
+        self.source.write_text('evidence', 'utf-8')
+        self.settings['analysis_max_calls'] = 3
+        with patch('fulltext_agent.time.sleep'), patch('agent_search.model_json') as caller:
+            caller.side_effect = ModelResponseError('暂时断连', retryable=True)
+            with self.assertRaises(ModelResponseError):
+                analyze(self.source, self.settings, self.root / 'cache', caller=caller)
+        self.assertEqual(caller.call_count, 3)
 
     def test_budget_rejects_without_sending_any_text(self):
         self.settings['analysis_max_calls'] = 2
@@ -136,10 +171,11 @@ class FulltextTests(unittest.TestCase):
                 window.poll()
                 time.sleep(.01)
             self.assertFalse(window.busy)
-        with patch('app.analyze', side_effect=ValueError('invalid response')):
+        with patch('app.analyze', side_effect=ModelResponseError('第 2/3 段：模型接口等待超过 180 秒')):
             window.process_fulltext([ident])
             wait()
         self.assertEqual(lib.get(ident)['summary'], 'original')
+        self.assertIn('第 2/3 段', lib.get(ident)['note'])
         info = {'segments': 3, 'calls': 4, 'cached_notes': 0}
         with patch('app.analyze', return_value=('new summary', info)):
             window.process_fulltext([ident])
@@ -161,6 +197,23 @@ class FulltextTests(unittest.TestCase):
         dialog.save_and_use()
         self.assertEqual(lib.settings()['analysis_questions'], '什么问题？\n什么局限？')
         self.assertEqual(lib.settings()['analysis_max_calls'], 24)
+
+    def test_settings_thinking_defaults_on_and_persists_off(self):
+        from ui_settings import SettingsDialog
+        from api_settings import read_config
+        config = Path(self.settings['api_config'])
+        config.write_text(json.dumps({'OpenAI': {'base_url': 'https://api.scnet.cn/api/llm/v1', 'api_key': 'test', 'model': 'DeepSeek-V4-Flash'}}), 'utf-8')
+        lib = Library(self.root / 'library.sqlite3')
+        lib.save_settings({**lib.settings(), **self.settings})
+        dialog = SettingsDialog(lib)
+        self.assertTrue(dialog.enable_thinking.isChecked())
+        dialog.enable_thinking.setChecked(False)
+        self.assertTrue(dialog.api_dirty)
+        dialog.save_and_use()
+        self.assertIs(read_config(config)['OpenAI']['enable_thinking'], False)
+        reopened = SettingsDialog(lib)
+        self.assertFalse(reopened.enable_thinking.isChecked())
+        reopened.close()
 
 
 if __name__ == '__main__':

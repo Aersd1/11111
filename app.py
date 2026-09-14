@@ -21,6 +21,7 @@ from paper_sections import extract_end
 from paper_links import parse_links, decode_links, links_text, open_link
 from folder_paths import parts, packed, ancestors, contains, ui_key
 from fulltext_agent import analyze
+from model_response import ModelResponseError
 from markdown_ui import MarkdownEdit, MarkdownPreview, editor_toolbar, markdown_view, open_typeset
 
 
@@ -601,7 +602,7 @@ class App(QMainWindow):
             self.detail_title.setText('选中一篇文献')
             self.detail_category.setText('在这里快速了解研究内容')
             self.detail_type.setText('预览')
-            for layout, text in zip(self.detail_bodies, ['总结与研究要点会显示在这里。', '查看摘要、关键词与备用引言。', '原文件位置、整理依据和处理状态。']):
+            for layout, text in zip(self.detail_bodies, ['总结与研究要点会显示在这里。', '查看摘要、引言前两段、结论和局限。', '原文件位置、整理依据和处理状态。']):
                 layout.addWidget(label(text, 'muted', True))
                 layout.addStretch()
             return
@@ -628,7 +629,7 @@ class App(QMainWindow):
         summary.addWidget(label('可选全文阅读；普通整理仍使用摘要等信息。请结合原文核对生成内容。', 'muted', True))
         section(abstract, '摘要', paper['abstract'] or '尚未识别，可手动补充。')
         section(abstract, '关键词', paper['keywords'] or '尚未识别')
-        section(abstract, '引言前两段 · 备用', paper['introduction'] or '尚未识别')
+        section(abstract, '引言前两段', paper['introduction'] or '尚未识别')
         section(abstract, '结论', paper.get('conclusion') or '尚未识别，可重新读取结论或手动补充。')
         section(abstract, '局限段', paper.get('limitations') or '尚未识别独立局限段，请结合结论核对。')
         section(abstract, '结论提取范围', paper.get('end_note') or '旧文献尚未读取结论')
@@ -921,7 +922,7 @@ class App(QMainWindow):
                         status='全文已分析', note='')
                 except Exception as exc:
                     failures += 1
-                    reason = str(exc) if isinstance(exc, ValueError) else '全文分析失败，请检查原文件和模型接口；原总结已保留。'
+                    reason = str(exc) if isinstance(exc, (ValueError, ModelResponseError)) else '全文分析失败，请检查原文件和模型接口；原总结已保留。'
                     self.library.update(paper_id, status='全文分析失败', note=reason[:500])
                 self.events.put(('refresh', None))
             self.events.put(('done', f'全文分析完成 · {len(ids)} 篇，{failures} 篇失败'))
@@ -965,44 +966,58 @@ class App(QMainWindow):
         self.add_button.setEnabled(False)
         self.show_detail()
         settings = self.library.settings()
-        def work():
+        def process_one(number, paper_id):
             failures = 0
-            for number, paper_id in enumerate(ids, 1):
-                paper = self.library.get(paper_id)
-                self.events.put(('status', f'正在整理 {number}/{len(ids)} · {paper["title"][:24]}'))
-                try:
-                    if extract_first:
-                        fields = extract(paper['path'])
-                        self.library.update(paper_id, **fields)
-                        paper.update(fields)
-                    if end_only or not paper.get('end_checked'):
-                        try:
-                            fields = extract_end(paper['path'])
-                        except Exception:
-                            fields = {'end_checked': 1, 'end_note': '结论读取失败，请检查文件或手动补充。'}
-                            if end_only:
-                                failures += 1
-                        if not end_only:
-                            # Never overwrite conclusions already corrected by the user.
-                            for key in ('conclusion', 'limitations'):
-                                if paper.get(key):
-                                    fields.pop(key, None)
-                        self.library.update(paper_id, **fields)
-                        paper.update(fields)
-                    if end_only:
-                        self.events.put(('refresh', None))
-                        continue
-                    if not any(paper.get(k) for k in ('abstract', 'keywords', 'conclusion', 'limitations')):
-                        self.library.update(paper_id, status='待补充摘要', note='请编辑补充摘要或关键词后重新整理。', summary='信息不足：暂未生成总结。')
-                    else:
-                        categories = [(m, n) for m, n in self.library.categories() if n and m != '待分类']
-                        result = organize(paper, settings, categories)
-                        self.library.update(paper_id, **result, note='')
-                except Exception as exc:
-                    failures += 1
-                    reason = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else '文件读取或处理失败，请检查格式、加密状态与依赖。'
-                    self.library.update(paper_id, status='处理失败', note=reason[:300])
-                self.events.put(('refresh', None))
+            paper = self.library.get(paper_id)
+            self.events.put(('status', f'正在整理 {number}/{len(ids)} · {paper["title"][:24]}'))
+            try:
+                if extract_first:
+                    fields = extract(paper['path'])
+                    self.library.update(paper_id, **fields)
+                    paper.update(fields)
+                if end_only or not paper.get('end_checked'):
+                    try:
+                        fields = extract_end(paper['path'])
+                    except Exception:
+                        fields = {'end_checked': 1, 'end_note': '结论读取失败，请检查文件或手动补充。'}
+                        if end_only:
+                            failures += 1
+                    if not end_only:
+                        # Never overwrite conclusions already corrected by the user.
+                        for key in ('conclusion', 'limitations'):
+                            if paper.get(key):
+                                fields.pop(key, None)
+                    self.library.update(paper_id, **fields)
+                    paper.update(fields)
+                if end_only:
+                    self.events.put(('refresh', None))
+                    return failures
+                if not any(paper.get(k) for k in ('abstract', 'keywords', 'introduction', 'conclusion', 'limitations')):
+                    self.library.update(paper_id, status='待补充摘要', note='请编辑补充摘要或关键词后重新整理。', summary='信息不足：暂未生成总结。')
+                else:
+                    categories = [(m, n) for m, n in self.library.categories() if n and m != '待分类']
+                    result = organize(paper, settings, categories)
+                    self.library.update(paper_id, **result, note='')
+            except Exception as exc:
+                failures += 1
+                reason = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else '文件读取或处理失败，请检查格式、加密状态与依赖。'
+                self.library.update(paper_id, status='处理失败', note=reason[:300])
+            self.events.put(('refresh', None))
+            return failures
+
+        def work():
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            failures = completed = 0
+            workers = 2 if settings['mode'] == '大模型' and not end_only else 1
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pending = [pool.submit(process_one, n, ident) for n, ident in enumerate(ids, 1)]
+                for future in as_completed(pending):
+                    try:
+                        failures += future.result()
+                    except Exception:
+                        failures += 1
+                    completed += 1
+                    self.events.put(('status', f'整理进度 {completed}/{len(ids)} · {failures} 篇失败'))
             self.events.put(('done', f'整理完成 · {len(ids)} 篇，{failures} 篇失败' if failures else f'整理完成 · 已处理 {len(ids)} 篇文献'))
         threading.Thread(target=work, daemon=True).start()
 

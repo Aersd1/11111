@@ -48,6 +48,14 @@ jobs:
         run: python -m unittest discover -s tests -p test_packaging.py -v
       - name: Inline folder interactions
         run: python -m unittest discover -s tests -p test_inline_folders.py -v
+      - name: Model response handling
+        run: python -m unittest discover -s tests -p test_model_response.py -v
+      - name: Analysis and settings regression checks
+        run: |
+          python -m unittest discover -s tests -p test_api_settings.py -v
+          python -m unittest discover -s tests -p test_library.py -v
+          python -m unittest discover -s tests -p test_research_features.py -v
+          python -m unittest discover -s tests -p test_ui.py -v
       - name: Full-text analysis and Markdown
         run: python -m unittest discover -s tests -p test_fulltext_agent.py -v
       - name: Live formula editor
@@ -93,4 +101,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "新增左右实时编辑：左侧输入 Markdown / LaTeX，右侧在应用内显示完整公式和排版，分隔条可拖动。支持插入网页与本地附件链接，保留加粗、斜体和公式快捷按钮。总结及个人描述保存后同样显示公式。内置离线排版组件，无需另装环境，安装包体积相应增加。保留全文 Agent、论文十问、缓存和历史版本。Windows 解压运行 EXE；Mac 打开 DMG；Linux 解压运行。未签名版本可能需要系统首次确认。"
+        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "更新文献分析：普通整理综合引言、结论和局限，改进 PDF 提取复用及批量整理，设置增加受支持模型的思考开关；支持流式模型响应，改进超时、异常响应与输出截断提示；全文阅读支持受调用预算限制的重试，保留已完成的阅读笔记及原有总结。保留 Markdown / LaTeX 实时预览和链接编辑。Windows 解压运行 EXE；Mac 打开 DMG；Linux 解压运行，无需配置 Python 环境。"
