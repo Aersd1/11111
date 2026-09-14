@@ -456,6 +456,7 @@ class UITests(unittest.TestCase):
         major.setExpanded(True)
         child = major.child(0)
         self.window.catalog.reveal_folder(child)
+        tree.scrollToItem(child)
         mime = QMimeData()
         mime.setData(PAPER_MIME, json.dumps(self.ids[:2]).encode())
         source_widget = self.window.table
@@ -464,7 +465,9 @@ class UITests(unittest.TestCase):
         class InternalDrop(QDropEvent):
             def source(self): return source_widget
         QAPP.processEvents()
-        point = tree.visualItemRect(child).center()
+        visible_row = tree.visualItemRect(child).intersected(tree.viewport().rect())
+        self.assertFalse(visible_row.isEmpty(), f"row={tree.visualItemRect(child)}, viewport={tree.viewport().rect()}")
+        point = visible_row.center()
         self.assertEqual(self.window.drop_category_target(tree.viewport(), point), ('我的项目', '待精读'))
         enter = InternalEnter(point, Qt.DropAction.MoveAction, mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         # Synthetic events have no native QDrag; dispatch to the filter directly
