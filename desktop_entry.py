@@ -62,7 +62,8 @@ def main():
         rendered = []
         deadline = time.monotonic() + 25
         while not any(rendered) and time.monotonic() < deadline:
-            preview.page().runJavaScript('document.querySelectorAll(".katex").length === 1', lambda value: rendered.append(bool(value)))
+            if preview._ready:
+                preview.page().runJavaScript('document.querySelectorAll(".katex").length === 1', lambda value: rendered.append(bool(value)))
             for _ in range(10):
                 application.processEvents()
                 time.sleep(.02)

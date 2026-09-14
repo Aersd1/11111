@@ -16,6 +16,10 @@ QAPP = QApplication.instance() or QApplication([])
 
 
 def javascript(view, expression):
+    deadline = time.monotonic() + 15
+    while not view._ready and time.monotonic() < deadline:
+        QTest.qWait(30)
+    if not view._ready: raise AssertionError('Preview page did not finish loading')
     result = []
     view.page().runJavaScript(expression, lambda value: result.append(value))
     deadline = time.monotonic() + 5
