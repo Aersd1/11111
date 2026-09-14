@@ -71,12 +71,6 @@ jobs:
           else
             python packaging/build_release.py
           fi
-      - name: Native preview crash trace
-        if: failure() && runner.os == 'macOS'
-        shell: bash
-        env:
-          QT_QPA_PLATFORM: cocoa
-        run: lldb --batch -o 'settings set target.process.stop-on-exec false' -o run -o bt -- "$(command -v python)" -m unittest discover -s tests -p test_live_markdown.py -v
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push' || inputs.package
         with:

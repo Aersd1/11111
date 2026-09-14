@@ -645,6 +645,7 @@ class App(QMainWindow):
         file.addWidget(button('重新关联文件', self.relink, 'soft', 'folder'))
         for layout in self.detail_bodies:
             layout.addStretch()
+        self.install_drop_filters()
 
     def idle_required(self):
         if self.busy:
