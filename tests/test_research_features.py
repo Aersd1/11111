@@ -139,7 +139,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(len(decode_links(value)), 2)
         with self.assertRaises(ValueError):
             parse_links('危险 | javascript:alert(1)')
-        with patch('paper_links.os.startfile') as opening:
+        with patch('platform_support.open_native') as opening:
             open_link(str(self.source))
             opening.assert_called_once_with(str(self.source))
 
