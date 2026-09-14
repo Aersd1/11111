@@ -230,3 +230,4 @@ class SearchPage(QWidget):
                 item.setToolTip(link['url'])
                 self.detail.addWidget(item)
         self.detail.addStretch()
+        self.host.install_drop_filters()

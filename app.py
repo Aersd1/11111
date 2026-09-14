@@ -104,7 +104,7 @@ class App(QMainWindow):
         self.setStyleSheet(STYLE)
         self.build()
         self.setAcceptDrops(True)
-        QApplication.instance().installEventFilter(self)
+        self.install_drop_filters()
         self.drop_feedback_timer = QTimer(self)
         self.drop_feedback_timer.setSingleShot(True)
         self.drop_feedback_timer.timeout.connect(self.clear_drop_hint)
@@ -827,6 +827,19 @@ class App(QMainWindow):
             suffix = f'（另有 {ignored} 项将忽略）' if ignored else ''
             self.show_drop_hint(f'松开鼠标，添加 {len(paths)} 个文献索引{suffix}')
         return True
+
+    def install_drop_filters(self):
+        # A Python application-wide filter sees Chromium's private QObjects,
+        # including objects whose metaobject is being destroyed. Filter only
+        # our widget tree and never descend into the embedded browser.
+        def visit(widget):
+            widget.installEventFilter(self)
+            if isinstance(widget, MarkdownPreview):
+                return
+            for child in widget.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+                if not child.isWindow():
+                    visit(child)
+        visit(self)
 
     def add_files(self):
         if self.idle_required():

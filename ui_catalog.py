@@ -492,3 +492,4 @@ class CatalogPage(QWidget):
             for link in decode_links(paper.get('links')):
                 self.detail_layout.addWidget(button(link['label'], lambda url=link['url']: self.host.open_reference(url), 'soft', 'open'))
         self.detail_layout.addStretch()
+        self.host.install_drop_filters()

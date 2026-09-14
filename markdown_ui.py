@@ -161,7 +161,9 @@ class PreviewPage(QWebEnginePage):
 class MarkdownPreview(QWebEngineView):
     def __init__(self, text='', parent=None):
         super().__init__(parent)
-        self.setPage(PreviewPage(self))
+        self.preview_page = PreviewPage(self)
+        self.setPage(self.preview_page)
+        self.setAcceptDrops(False)
         self.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         self.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         self.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
