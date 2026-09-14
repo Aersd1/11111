@@ -711,7 +711,8 @@ class App(QMainWindow):
         for tree in (self.tree, self.catalog.tree):
             if not tree.isVisible():
                 continue
-            local = tree.viewport().mapFrom(watched, point)
+            # The source and target can be siblings, not ancestors.
+            local = tree.viewport().mapFromGlobal(watched.mapToGlobal(point))
             if not tree.viewport().rect().contains(local):
                 continue
             item = tree.itemAt(local)
