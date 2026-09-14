@@ -1,6 +1,11 @@
 name: Desktop packages
 on:
   workflow_dispatch:
+    inputs:
+      package:
+        description: Build desktop archives after tests
+        type: boolean
+        default: true
   push:
     tags: ['v*']
 permissions:
@@ -56,6 +61,7 @@ jobs:
             python -m unittest discover -s tests -p test_live_markdown.py -v
           fi
       - name: Build and test packaged application
+        if: github.event_name == 'push' || inputs.package
         shell: bash
         env:
           QT_QPA_PLATFORM: ${{ runner.os == 'macOS' && 'cocoa' || runner.os == 'Linux' && 'xcb' || 'offscreen' }}
@@ -70,8 +76,9 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: cocoa
-        run: lldb --batch -o run -o bt -- "$(command -v python)" -m unittest discover -s tests -p test_live_markdown.py -v
+        run: lldb --batch -o 'settings set target.process.stop-on-exec false' -o run -o bt -- "$(command -v python)" -m unittest discover -s tests -p test_live_markdown.py -v
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' || inputs.package
         with:
           name: LiteratureShelf-${{ matrix.label }}
           path: release/*
