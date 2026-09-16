@@ -44,7 +44,7 @@ class UITests(unittest.TestCase):
         self.assertEqual(target.read_text('utf-8'), contents)
         self.assertFalse(source.exists())
         added = next(p for p in self.lib.all() if p['title'] == 'A Scientific Result')
-        self.assertEqual(Path(added['path']), target)
+        self.assertEqual(Path(added['path']).resolve(), target.resolve())
 
     def test_fulltext_dialog_saves_supplementary_questions(self):
         from PySide6.QtWidgets import QPlainTextEdit
