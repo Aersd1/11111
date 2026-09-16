@@ -135,6 +135,19 @@ class SettingsDialog(QDialog):
         analysis_layout.addWidget(button('恢复论文十问', lambda: self.analysis_questions.setPlainText('\n'.join(QUESTIONS)), 'ghost'))
         analysis_layout.addWidget(label('每篇最多一次请求；复用相同问题的完整回答时不调用模型。失败后由你手动重试。全文不截断，也不自动拆成多次请求；需要模型支持相应的上下文长度。思考模式沿用“模型接口”设置。', 'muted', True))
         self.tabs.addTab(analysis_page, '全文分析')
+        translation_page = QWidget()
+        translation_layout = QVBoxLayout(translation_page)
+        self.translation_pages = QSpinBox()
+        self.translation_pages.setRange(1, 20)
+        self.translation_pages.setValue(int(self.settings.get('translation_pages', 5)))
+        self.translation_pages.setSuffix(' 页 / 次')
+        translation_layout.addWidget(label('全文中文 / 中英对照', 'sectionTitle'))
+        translation_layout.addWidget(label('每次请求翻译页数（默认 5 页）', 'muted'))
+        translation_layout.addWidget(self.translation_pages)
+        translation_layout.addWidget(label('PDF 最多两批同时请求大模型，每批完成立即保存；左侧原始 PDF 与右侧中文严格按页码对应。跨页句子参考前后文，但不会挪到其他页。临时断线最多重试两次，完成批次不重发；思考沿用接口设置。无页码文档按文本段处理。', 'muted', True))
+        translation_layout.addStretch()
+        self.tabs.addTab(translation_page, '全文翻译')
+        self.translation_pages.valueChanged.connect(self.mark_dirty)
         self.analysis_questions.textChanged.connect(self.mark_dirty)
         rules_page = QWidget()
         rules_layout = QVBoxLayout(rules_page)
@@ -331,7 +344,7 @@ class SettingsDialog(QDialog):
                     write_config(self.path.text(), document)
             self.library.save_settings({**self.settings, 'api_config': self.path.text(), 'mode': self.mode.currentText(),
                 'opener': self.opener.currentText(), 'program': self.program.text().strip(), 'rules': rules,
-                'analysis_questions': self.analysis_questions.toPlainText()})
+                'translation_pages': self.translation_pages.value(), 'analysis_questions': self.analysis_questions.toPlainText()})
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, '无法保存', str(exc))
             return

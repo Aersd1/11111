@@ -38,6 +38,127 @@ def wait_render(view, expression):
 
 
 class LiveMarkdownTests(unittest.TestCase):
+    def test_reader_keeps_edited_bilingual_markdown_and_notes(self):
+        from reader_ui import DocumentReader
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'paper.md'
+            source.write_text('English original $x$', 'utf-8')
+            paper = {'id': 1, 'title': 'A paper', 'path': str(source), 'summary': 'Summary'}
+            reader = DocumentReader(paper, {}, root / 'cache')
+            reader.show()
+            deadline = time.monotonic() + 15
+            while reader.busy and time.monotonic() < deadline:
+                QTest.qWait(50)
+            try:
+                self.assertFalse(reader.busy)
+                self.assertEqual(reader.mode.currentIndex(), 2)
+                reader.mode.setCurrentIndex(3)
+                reader.target.setCurrentText('中文.md')
+                reader.editor.setPlainText('人工校订中文 $x$')
+                self.assertTrue(reader.save())
+                reader.mode.setCurrentIndex(2)
+                wait_render(reader.chinese, 'document.body.innerText.includes("人工校订中文")')
+                wait_render(reader.source, '!!window.noteBridge')
+                reader.source.add_note()
+                wait_render(reader.source, 'document.querySelectorAll(".paper-note").length === 1')
+                javascript(reader.source, 'noteItems[0].text="待核对";noteItems[0].x=23;noteItems[0].y=240;saveNotes();')
+                QTest.qWait(300)
+                notes = json.loads((reader.folder / '批注.json').read_text('utf-8'))
+                self.assertEqual(notes['英文原文'][0]['text'], '待核对')
+                reader.restore_notes()
+                self.assertEqual(reader.source.notes[0]['y'], 240)
+                self.assertEqual((reader.folder / '中文.md').read_text('utf-8'), '人工校订中文 $x$')
+            finally:
+                reader.close()
+                QTest.qWait(200)
+
+    def test_wheel_scrolls_outer_continuous_preview(self):
+        from reading_widgets import SectionPreview
+        from PySide6.QtWidgets import QScrollArea, QWidget, QVBoxLayout
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        outer = QScrollArea()
+        outer.setWidgetResizable(True)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        preview = SectionPreview([('章节', '\n\n'.join(['Paragraph']*100))], expand_height=True)
+        layout.addWidget(preview)
+        outer.setWidget(body)
+        outer.resize(500, 350)
+        outer.show()
+        try:
+            wait_render(preview, 'document.querySelectorAll("p").length > 50')
+            QTest.qWait(500)
+            event = QWheelEvent(QPointF(40,40), QPointF(40,40), QPoint(), QPoint(0,-120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+            QAPP.sendEvent(preview.focusProxy(), event)
+            self.assertGreater(outer.verticalScrollBar().value(), 0)
+        finally:
+            outer.close()
+
+    def test_continuous_sections_collapse_and_note_bridge(self):
+        from reading_widgets import SectionPreview, AnnotatedPreview
+        view = SectionPreview([('研究总结', '\n\n'.join(['Long paragraph'] * 60)), ('摘要', '$x_i$')], expand_height=True)
+        view.resize(500, 400)
+        view.show()
+        try:
+            wait_render(view, 'document.querySelectorAll("details").length === 2 && document.querySelector(".katex") !== null')
+            QTest.qWait(500)
+            expanded = view.height()
+            javascript(view, 'document.querySelector("summary").click()')
+            QTest.qWait(600)
+            self.assertLess(view.height(), expanded - 300)
+        finally:
+            view.close()
+        changed = []
+        notes = AnnotatedPreview('英文原文', lambda: changed.append(True))
+        notes.resize(600, 500)
+        notes.show()
+        try:
+            wait_render(notes, '!!window.noteBridge')
+            notes.add_note()
+            wait_render(notes, 'document.querySelectorAll(".paper-note").length === 1')
+            javascript(notes, 'const t=document.querySelector("textarea");t.value="需要核对公式";t.dispatchEvent(new Event("input"));noteItems[0].x=40;noteItems[0].y=320;saveNotes();')
+            QTest.qWait(300)
+            self.assertTrue(changed)
+            self.assertEqual(notes.notes[0]['text'], '需要核对公式')
+            self.assertEqual(notes.notes[0]['y'], 320)
+            saved = notes.notes.copy()
+            notes.restore_notes(saved)
+            self.assertEqual(javascript(notes, 'parseInt(document.querySelector(".paper-note").style.left)'), 40)
+            notes.setMarkdown('Edited **Markdown** $x$')
+            QTest.qWait(400)
+            self.assertEqual(javascript(notes, 'document.querySelectorAll(".paper-note").length'), 1)
+        finally:
+            notes.close()
+
+    def test_multiline_math_code_images_and_zoom(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            Image.new('RGB', (800, 300), 'red').save(root / 'figure.png')
+            text = '![图片](figure.png)\n\n$$\n\\begin{aligned}a&=b+c\\\\d&=e\\end{aligned}\n$$\n\n```math\n\\frac{1}{1+x}\n```\n\n`$not_math$`\n\n\\(x_i^2\\)'
+            view = MarkdownPreview(text, base_dir=root)
+            view.resize(500, 500)
+            view.show()
+            try:
+                wait_render(view, 'document.querySelectorAll(".katex").length === 3 && document.querySelector("#content img").naturalWidth > 0')
+                self.assertEqual(javascript(view, 'document.querySelectorAll(".katex-error").length'), 0)
+                self.assertIn('$not_math$', javascript(view, 'document.body.innerText'))
+                for scale in (.5, 1.0, 1.75, 3.0, 1.0):
+                    view.setZoomFactor(scale)
+                    QTest.qWait(100)
+                    self.assertAlmostEqual(view.zoomFactor(), scale, places=2)
+                    self.assertEqual(javascript(view, 'document.querySelectorAll(".katex").length'), 3)
+                    self.assertTrue(javascript(view, 'document.querySelector("img").getBoundingClientRect().width <= innerWidth'))
+                view.resize(280, 500)
+                QTest.qWait(100)
+                self.assertTrue(javascript(view, 'document.documentElement.scrollWidth <= innerWidth + 1'))
+            finally:
+                view.close()
+                view.deleteLater()
+                QAPP.processEvents()
+
     def test_real_typesetting_updates_and_safe_links(self):
         view = MarkdownPreview('**重点** *斜体* $x_i^2$\n\n$$\\frac{a}{b}$$\n\n[论文](https://example.org/paper)')
         view.resize(680, 600)
@@ -93,6 +214,9 @@ class LiveMarkdownTests(unittest.TestCase):
             errors = []
             def edit():
                 dialog = QAPP.activeModalWidget()
+                if dialog is None:
+                    QTimer.singleShot(50, edit)
+                    return
                 try:
                     tabs = dialog.findChild(QTabWidget)
                     preview = dialog.findChild(MarkdownPreview)
@@ -104,6 +228,15 @@ class LiveMarkdownTests(unittest.TestCase):
                     entry.setPlainText('描述 **重点** $$\\frac{1}{2}$$\n\n[资料](https://example.org)')
                     wait_render(preview, 'document.querySelectorAll(".katex").length === 1 && document.body.innerText.includes("描述")')
                     from PySide6.QtWidgets import QPushButton
+                    expand = next(b for b in dialog.findChildren(QPushButton) if '在大窗口中编辑' in b.text())
+                    expand.click()
+                    from reader_ui import MarkdownWindow
+                    large = dialog.findChild(MarkdownWindow)
+                    self.assertTrue(large.isMaximized())
+                    large.editor.setPlainText(entry.toPlainText() + '\n\n大窗口回填内容')
+                    apply_button = next(b for b in large.findChildren(QPushButton) if '应用到编辑内容' in b.text())
+                    apply_button.click()
+                    self.assertIn('大窗口回填内容', entry.toPlainText())
                     save = next(b for b in dialog.findChildren(QPushButton) if '保存修改' in b.text())
                     save.click()
                 except Exception as exc:

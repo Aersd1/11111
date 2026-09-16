@@ -37,6 +37,17 @@ def main():
         writer.add_blank_page(width=300, height=300)
         writer.write(str(pdf))
         extract(pdf)
+        from pdf_reader import PdfPane
+        native_pdf = PdfPane(pdf, lambda: None)
+        assert native_pdf.document.pageCount() == 1
+        native_pdf.set_page(1)
+        assert native_pdf.view.pageNavigator().currentPage() == 0
+        native_pdf.document.close()
+        native_pdf.deleteLater()
+        from document_markdown import prepare_document
+        bundle = prepare_document(pdf, root / 'documents')
+        assert (bundle / 'assets/page-1-original.png').is_file()
+        assert 'assets/page-1-original.png' in (bundle / '原文.md').read_text('utf-8')
         source = root / 'smoke.txt'
         source.write_text('battery energy prediction', 'utf-8')
         ident, _ = window.library.add(source)
@@ -57,17 +68,30 @@ def main():
         assert editor.toPlainText() == '**test**'
         from markdown_ui import MarkdownPreview
         import time
-        preview = MarkdownPreview('**Formula** $$\\frac{a}{b}$$')
+        preview = MarkdownPreview('**Formula** $$\\frac{a}{b}$$\n\n![页面](assets/page-1-original.png)', base_dir=bundle)
         preview.show()
         rendered = []
         deadline = time.monotonic() + 25
         while not any(rendered) and time.monotonic() < deadline:
             if preview._ready:
-                preview.page().runJavaScript('document.querySelectorAll(".katex").length === 1', lambda value: rendered.append(bool(value)))
+                preview.page().runJavaScript('document.querySelectorAll(".katex").length === 1 && document.querySelector("#content img").naturalWidth > 0', lambda value: rendered.append(bool(value)))
             for _ in range(10):
                 application.processEvents()
                 time.sleep(.02)
         assert any(rendered), 'Packaged offline formula renderer failed'
+        from reading_widgets import AnnotatedPreview
+        changes = []
+        annotated = AnnotatedPreview('英文原文', lambda: changes.append(True))
+        annotated.show()
+        deadline = time.monotonic() + 15
+        while not changes and time.monotonic() < deadline:
+            annotated.add_note()
+            for _ in range(10):
+                application.processEvents()
+                time.sleep(.02)
+        assert changes and annotated.notes, 'Packaged annotation bridge failed'
+        annotated.close()
+        annotated.deleteLater()
         preview.close()
         preview.deleteLater()
         window.show()
@@ -75,7 +99,7 @@ def main():
         assert window.grab().save(str(root / 'smoke.png'))
         window.close()
         (root / 'smoke-result.json').write_text(json.dumps({'ok': True, 'frozen': bool(getattr(sys, 'frozen', False)),
-            'platform': sys.platform, 'pdf': True, 'search': True, 'folders': True}), 'utf-8')
+            'platform': sys.platform, 'pdf': True, 'search': True, 'folders': True, 'markdown_images': True, 'annotations': True, 'native_pdf': True}), 'utf-8')
         return 0
     screen = application.primaryScreen().availableGeometry()
     window.resize(min(1510, screen.width() - 32), min(925, screen.height() - 45))

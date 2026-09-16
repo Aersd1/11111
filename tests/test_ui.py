@@ -26,6 +26,26 @@ QAPP.setStyleSheet(STYLE)
 
 
 class UITests(unittest.TestCase):
+    def test_new_ai_import_renames_original_and_updates_index(self):
+        self.lib.save_settings({**self.lib.settings(), 'mode': '大模型'})
+        source = self.root / 'downloaded-file.txt'
+        contents = 'Scientific title\n\nAbstract: We evaluate a method.\n\n1 Introduction\nMotivation.'
+        source.write_text(contents, 'utf-8')
+        result = {'title': 'A Scientific Result', 'major': 'Science', 'minor': 'Methods', 'summary': 'Evidence', 'basis': 'all sections', 'status': '模型已整理'}
+        with patch('app.organize', return_value=result):
+            self.window.import_paths([str(source)])
+            deadline = time.monotonic() + 5
+            while self.window.busy and time.monotonic() < deadline:
+                QAPP.processEvents()
+                self.window.poll()
+                time.sleep(.01)
+        self.assertFalse(self.window.busy)
+        target = self.root / 'A Scientific Result.txt'
+        self.assertEqual(target.read_text('utf-8'), contents)
+        self.assertFalse(source.exists())
+        added = next(p for p in self.lib.all() if p['title'] == 'A Scientific Result')
+        self.assertEqual(Path(added['path']), target)
+
     def test_fulltext_dialog_saves_supplementary_questions(self):
         from PySide6.QtWidgets import QPlainTextEdit
         ident = self.window.selected_ids()[0]
@@ -183,6 +203,30 @@ class UITests(unittest.TestCase):
         self.assertEqual(self.lib.all()[0]['minor'], '大语言模型')
         self.assertTrue(source.is_file())
 
+    def test_overview_title_column_expands_with_splitter(self):
+        self.window.resize(1600, 950)
+        self.window.splitter.setSizes([520, 600])
+        QAPP.processEvents()
+        before = self.window.table.columnWidth(0)
+        self.window.splitter.setSizes([800, 320])
+        QAPP.processEvents()
+        self.assertGreater(self.window.table.columnWidth(0), before + 100)
+        widths = sum(self.window.table.columnWidth(i) for i in range(3))
+        self.assertAlmostEqual(widths, self.window.table.viewport().width(), delta=3)
+
+    def test_overview_resizes_and_translation_page_setting_persists(self):
+        for width, height in [(1510,925),(1000,700),(1400,900),(1000,650)]:
+            self.window.resize(width,height)
+            QAPP.processEvents()
+            self.assertEqual(self.window.splitter.orientation(), Qt.Orientation.Horizontal)
+            self.assertEqual(self.window.stat_cards.isVisible(), width >= 1100 and height >= 800)
+            self.assertGreater(self.window.splitter.height(), 280)
+        dialog = SettingsDialog(self.lib, self.window)
+        self.assertEqual(dialog.translation_pages.value(), 5)
+        dialog.translation_pages.setValue(3)
+        dialog.save_and_use()
+        self.assertEqual(self.lib.settings()['translation_pages'], 3)
+
     def test_render_main_and_settings_at_two_sizes(self):
         output = Path(__file__).resolve().parents[1] / 'output' / 'ui'
         output.mkdir(parents=True, exist_ok=True)
@@ -291,19 +335,21 @@ class UITests(unittest.TestCase):
         self.window.splitter.setSizes([500, 480])
         self.window.set_page('catalog')
         self.window.catalog.splitter.setSizes([540, 370])
-        self.window.table.setColumnWidth(0, 375)
+        self.window.table.setColumnWidth(1, 150)
         self.window.catalog.tree.setColumnWidth(0, 460)
         QAPP.processEvents()
         self.window.save_layout()
         saved = self.lib.settings()['ui_state']
         self.assertEqual(saved['outer_sizes'], splitter.sizes())
         self.assertEqual(saved['page'], 'catalog')
-        self.assertEqual(saved['overview_columns'][0], 375)
+        self.assertEqual(saved['overview_columns'][1], 150)
         other = App(self.lib)
         other.show()
         QAPP.processEvents()
         self.assertEqual(other.pages.currentWidget(), other.catalog)
-        self.assertEqual(other.table.columnWidth(0), 375)
+        self.assertEqual(other.table.columnWidth(1), 150)
+        from PySide6.QtWidgets import QHeaderView
+        self.assertEqual(other.table.horizontalHeader().sectionResizeMode(0), QHeaderView.ResizeMode.Stretch)
         # Folder actions remain visible; the name column now fills available space.
         self.assertEqual(other.catalog.tree.columnWidth(1), 210)
         self.assertLessEqual(other.catalog.tree.columnWidth(0) + 210, other.catalog.tree.viewport().width() + 2)

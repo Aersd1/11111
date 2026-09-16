@@ -56,6 +56,10 @@ jobs:
           python -m unittest discover -s tests -p test_library.py -v
           python -m unittest discover -s tests -p test_research_features.py -v
           python -m unittest discover -s tests -p test_ui.py -v
+      - name: Document conversion and page translation
+        run: |
+          python -m unittest discover -s tests -p test_documents_markdown.py -v
+          python -m unittest discover -s tests -p test_pdf_pages.py -v
       - name: Full-text analysis and Markdown
         run: python -m unittest discover -s tests -p test_fulltext_agent.py -v
       - name: Live formula editor
@@ -101,4 +105,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "全文分析改为一次提交完整可提取正文，逐题回答预设问题和补充问题，不再分段生成笔记或回读。支持每篇保存补充问题及批次追加；正文、问题和接口配置未变时可复用完整回答。失败不自动重复请求，保留原总结与历史记录。保留 Markdown / LaTeX 实时预览和目录管理。Windows 解压运行 EXE；Mac 打开 DMG；Linux 解压运行，无需配置 Python 环境。"
+        run: gh release create "$GITHUB_REF_NAME" release-files/* --title "文献书架 $GITHUB_REF_NAME" --notes "新增内置 PDF 阅读与逐页批注，支持文档 Markdown 转换、双语阅读及全文翻译，支持按页翻译进度保存和续传。更新阅读界面与模型响应处理，保留全文问答、补充问题、公式预览和目录管理。Windows 解压运行 EXE；Mac 打开 DMG；Linux 解压运行，无需配置 Python 环境。"

@@ -3,7 +3,7 @@ from pathlib import Path
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ['app.py', 'library_core.py', 'platform_support.py', 'desktop_entry.py', 'ui_catalog.py',
+FILES = ['document_markdown.py', 'paper_names.py', 'pdf_reader.py', 'pdf_translation.py', 'reader_ui.py', 'reading_widgets.py', 'tests/test_documents_markdown.py', 'tests/test_pdf_pages.py', 'app.py', 'library_core.py', 'platform_support.py', 'desktop_entry.py', 'ui_catalog.py',
     'ui_search.py', 'ui_settings.py', 'ui_theme.py', 'ui_drag.py', 'local_search.py', 'agent_search.py',
     'api_settings.py', 'paper_sections.py', 'paper_links.py', 'disk_catalog.py', 'folder_paths.py',
     'requirements.txt', 'requirements-build.txt', 'README.md', '.gitignore',

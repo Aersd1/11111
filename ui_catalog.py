@@ -114,7 +114,7 @@ class CatalogPage(QWidget):
         self.search.addAction(icon('search'), QLineEdit.ActionPosition.LeadingPosition)
         self.search.textChanged.connect(self.rebuild)
         layout.addWidget(self.search)
-        layout.addWidget(label('支持多层文件夹 · 添加可在任意层新建子文件夹 · 双击文献打开原文', 'muted', True))
+        layout.addWidget(label('支持多层文件夹 · 添加可在任意层新建子文件夹 · 双击文献使用原来的阅读方式', 'muted', True))
         self.tree = FoldTree()
         self.tree.setRootIsDecorated(True)
         self.tree.setStyleSheet('QTreeWidget::item { padding: 0px 6px; height: 42px; }')
@@ -155,10 +155,11 @@ class CatalogPage(QWidget):
         self.empty = label('没有匹配的文献，可调整搜索或侧栏筛选。', 'muted', True)
         layout.addWidget(self.empty)
         actions = QHBoxLayout()
-        self.open_button = button('打开', host.open_selected, 'soft', 'open')
+        self.open_button = button('阅读全文', host.open_selected, 'soft', 'open')
+        self.bilingual_button = button('中英对照', host.open_document_reader, 'primary')
         self.edit_button = button('编辑', host.edit_dialog, glyph='edit')
         self.organize_button = button('整理所选', host.process_selected, glyph='spark')
-        for control in (self.open_button, self.edit_button, self.organize_button):
+        for control in (self.open_button, self.bilingual_button, self.edit_button, self.organize_button):
             actions.addWidget(control)
         actions.addStretch()
         self.more_button = button('', host.more_menu, 'ghost', 'more')
@@ -169,6 +170,7 @@ class CatalogPage(QWidget):
         frame, layout = card_layout(margins=20)
         frame.setMinimumWidth(270)
         layout.addWidget(label('阅读预览', 'sectionTitle'))
+        layout.addWidget(button('弹出完整阅读预览', host.open_paper_preview, 'soft'))
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         page = QWidget()
@@ -450,7 +452,7 @@ class CatalogPage(QWidget):
     def show_detail(self):
         ids = self.selected_ids()
         paper = self.by_id.get(ids[0]) if ids else None
-        for control in (self.open_button, self.edit_button, self.organize_button):
+        for control in (self.open_button, self.bilingual_button, self.edit_button, self.organize_button):
             control.setEnabled(bool(paper) and (not self.host.busy or control == self.open_button))
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
@@ -458,32 +460,12 @@ class CatalogPage(QWidget):
                 item.widget().hide()
                 item.widget().deleteLater()
         if paper:
-            fields = [(paper['title'], 'sectionTitle'), (paper['major'] + ' / ' + paper['minor'], 'muted'),
-                      ('研究总结', 'eyebrow'), (paper['summary'] or '尚未整理', None),
-                      ('个人描述', 'eyebrow'), (paper.get('description') or '尚未填写', None),
-                      ('摘要', 'eyebrow'), (paper['abstract'] or '尚未识别，可点击编辑补充。', None),
-                      ('结论', 'eyebrow'), (paper.get('conclusion') or '尚未识别，可读取结论或手动补充。', None),
-                      ('局限', 'eyebrow'), (paper.get('limitations') or '未识别独立局限段，请结合结论核对。', None),
-                      ('原文件', 'eyebrow'), (paper['path'], 'muted')]
+            from reading_widgets import SectionPreview, paper_sections
+            from pathlib import Path
+            self.detail_layout.addWidget(label(paper['title'], 'sectionTitle', True))
+            self.detail_layout.addWidget(SectionPreview(paper_sections(paper), Path(paper['path']).parent, expand_height=True))
         else:
-            fields = [('按目录浏览文献', 'sectionTitle'), ('逐层展开文件夹，再选择文献查看总结与摘要。每个文件夹的“添加”都可以创建子文件夹。', 'muted')]
-        for text, style in fields:
-            if paper and style is None and text in (paper.get('summary'), paper.get('description')):
-                from markdown_ui import markdown_view
-                self.detail_layout.addWidget(markdown_view(text))
-                continue
-            if paper and text == paper['path']:
-                path_box = QPlainTextEdit(text)
-                path_box.setReadOnly(True)
-                path_box.setWordWrapMode(QTextOption.WrapMode.WrapAnywhere)
-                path_box.setFixedHeight(80)
-                path_box.setStyleSheet('background: white; border:none; padding:0; color:#7c8098; font-size:13px;')
-                self.detail_layout.addWidget(path_box)
-                continue
-            widget = label(text, style, True)
-            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.detail_layout.addWidget(widget)
+            self.detail_layout.addWidget(label('选择文献查看阅读预览。', 'muted', True))
         if paper:
             from paper_links import decode_links
             self.detail_layout.addWidget(button('全文 Agent 分析 / 再次分析', self.host.fulltext_dialog, 'soft'))

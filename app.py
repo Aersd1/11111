@@ -22,7 +22,7 @@ from paper_links import parse_links, decode_links, links_text, open_link
 from folder_paths import parts, packed, ancestors, contains, ui_key
 from fulltext_agent import analyze, combined_questions, questions_from, QUESTIONS
 from model_response import ModelResponseError
-from markdown_ui import MarkdownEdit, MarkdownPreview, editor_toolbar, markdown_view, open_typeset
+from markdown_ui import MarkdownEdit, MarkdownPreview, editor_toolbar, markdown_view, open_typeset, zoom_toolbar
 
 
 class PaperDelegate(QStyledItemDelegate):
@@ -101,7 +101,8 @@ class App(QMainWindow):
         self.setWindowTitle('文献书架 · Research Library')
         self.setWindowIcon(icon('library', '#7849e9'))
         self.resize(1510, 925)
-        self.setMinimumSize(1200, 750)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setMinimumSize(min(1000, screen.width() - 40), min(650, screen.height() - 50))
         self.setStyleSheet(STYLE)
         self.build()
         self.setAcceptDrops(True)
@@ -165,6 +166,7 @@ class App(QMainWindow):
         sidebar = QFrame()
         sidebar.setObjectName('sidebar')
         sidebar.setMinimumWidth(195)
+        self.category_sidebar = sidebar
         self.sidebar = sidebar
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(20, 28, 20, 20)
@@ -229,11 +231,18 @@ class App(QMainWindow):
         heading.setSpacing(6)
         self.drop_hint = label('欢迎回到你的研究空间 · 支持拖拽文献添加', 'muted')
         heading.addWidget(self.drop_hint)
-        heading.addWidget(label('发现、整理，让知识相连', 'heading'))
+        self.workspace_heading = label('发现、整理，让知识相连', 'heading')
+        heading.addWidget(self.workspace_heading)
         header.addLayout(heading, 1)
+        self.compact_navigation = QComboBox()
+        self.compact_navigation.addItems(['概览', '文献目录', '搜索文献'])
+        self.compact_navigation.currentIndexChanged.connect(lambda index: self.set_page(('overview', 'catalog', 'search')[index]))
+        self.compact_navigation.hide()
+        header.addWidget(self.compact_navigation)
         settings = button('', self.settings_dialog, 'ghost', 'settings')
         settings.setToolTip('设置与模型接口')
         header.addWidget(settings)
+        header.addWidget(button('Markdown', lambda: self.open_markdown_preview(''), 'soft', 'edit'))
         self.add_button = button('添加文献', self.add_files, 'primary', 'plus')
         self.add_button.setToolTip('点击选择文件，或将一个／多个 PDF、DOCX、TXT、MD 拖到窗口')
         header.addWidget(self.add_button)
@@ -253,7 +262,10 @@ class App(QMainWindow):
         self.pending_card = StatCard('等待整理', '补充信息 · 继续探索', ('#f875b0', '#fc9973'), 'spark')
         for card in (self.total_card, self.organized_card, self.pending_card):
             cards.addWidget(card, 1)
-        content.addLayout(cards)
+        self.stat_cards = QWidget()
+        self.stat_cards.setLayout(cards)
+        cards.setContentsMargins(0, 0, 0, 0)
+        content.addWidget(self.stat_cards)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setHandleWidth(14)
         self.splitter.setChildrenCollapsible(False)
@@ -290,6 +302,7 @@ class App(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 330)
         self.table.setColumnWidth(1, 133)
         self.table.setColumnWidth(2, 109)
@@ -328,12 +341,13 @@ class App(QMainWindow):
         table_layout.addLayout(pagination)
         operations = QHBoxLayout()
         operations.setSpacing(7)
-        self.open_button = button('打开', self.open_selected, 'soft', 'open')
+        self.open_button = button('阅读全文', self.open_selected, 'soft', 'open')
+        self.bilingual_button = button('中英对照', self.open_document_reader, 'soft')
         self.organize_button = button('整理', self.process_selected, glyph='spark')
         self.edit_button = button('编辑', self.edit_dialog, glyph='edit')
         self.more_button = button('', self.more_menu, 'ghost', 'more')
         self.more_button.setToolTip('打开方式、重新关联、移除索引与导出')
-        for item in (self.open_button, self.organize_button, self.edit_button):
+        for item in (self.open_button, self.bilingual_button, self.organize_button, self.edit_button):
             operations.addWidget(item)
         operations.addStretch()
         operations.addWidget(self.more_button)
@@ -352,6 +366,7 @@ class App(QMainWindow):
         detail_layout.addWidget(self.detail_title)
         self.detail_category = label('在这里快速了解研究内容', 'muted', True)
         detail_layout.addWidget(self.detail_category)
+        detail_layout.addWidget(button('弹出完整阅读预览', self.open_paper_preview, 'soft'))
         self.detail_tabs = QTabWidget()
         self.detail_bodies = []
         for title in ('总结', '摘要', '文件'):
@@ -399,6 +414,9 @@ class App(QMainWindow):
         self.overview_button.setChecked(name not in ('catalog', 'search'))
         self.catalog_button.setChecked(name == 'catalog')
         self.search_button.setChecked(name == 'search')
+        self.compact_navigation.blockSignals(True)
+        self.compact_navigation.setCurrentIndex({'catalog': 1, 'search': 2}.get(name, 0))
+        self.compact_navigation.blockSignals(False)
         self.schedule_layout_save()
 
     def schedule_layout_save(self, *args):
@@ -594,7 +612,7 @@ class App(QMainWindow):
             self.catalog.show_detail()
         if hasattr(self, 'search_page'):
             self.search_page.show_detail()
-        for control in (self.open_button, self.detail_open, self.organize_button, self.edit_button):
+        for control in (self.open_button, self.bilingual_button, self.detail_open, self.organize_button, self.edit_button):
             control.setEnabled(bool(paper) and (not self.busy or control in (self.open_button, self.detail_open)))
         for layout in self.detail_bodies:
             clear_layout(layout)
@@ -611,21 +629,16 @@ class App(QMainWindow):
         self.detail_title.setToolTip(paper['title'])
         self.detail_category.setText(paper['major'] + ' / ' + paper['minor'])
         self.detail_type.setText(Path(paper['path']).suffix[1:].upper())
+        sections = {}
         def section(layout, title, text):
-            layout.addWidget(label(title, 'eyebrow'))
-            if title in ('研究总结', '个人描述'):
-                layout.addWidget(markdown_view(text))
-                return
-            value = label(text, wrap=True)
-            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            value.setStyleSheet('font-size:14px; color:#646781;')
-            layout.addWidget(value)
+            sections.setdefault(layout, []).append((title, text))
         summary, abstract, file = self.detail_bodies
         section(summary, '研究总结', paper['summary'] or '尚未生成总结。点击“整理”开始，或通过“编辑”补充摘要。')
         section(summary, '整理依据', paper['basis'] or '尚未整理')
         summary.addWidget(button('全文 Agent 分析 / 再次分析', self.fulltext_dialog, 'soft'))
         summary.addWidget(button('总结历史版本', self.history_dialog, 'soft'))
         summary.addWidget(button('总结排版预览（含公式）', lambda: self.open_markdown_preview(paper['summary']), 'soft'))
+        summary.addWidget(button('中英对照', self.open_document_reader, 'primary'))
         summary.addWidget(label('可选全文阅读；普通整理仍使用摘要等信息。请结合原文核对生成内容。', 'muted', True))
         section(abstract, '摘要', paper['abstract'] or '尚未识别，可手动补充。')
         section(abstract, '关键词', paper['keywords'] or '尚未识别')
@@ -644,7 +657,10 @@ class App(QMainWindow):
             section(file, '处理说明', paper['note'])
         section(file, '添加时间', paper['added'] + ' UTC')
         file.addWidget(button('重新关联文件', self.relink, 'soft', 'folder'))
+        from reading_widgets import SectionPreview
         for layout in self.detail_bodies:
+            if sections.get(layout):
+                layout.insertWidget(0, SectionPreview(sections[layout], Path(paper['path']).parent, expand_height=True))
             layout.addStretch()
         self.install_drop_filters()
 
@@ -881,10 +897,29 @@ class App(QMainWindow):
             self.process(self.selected_ids())
 
     def open_markdown_preview(self, text):
-        try:
-            open_typeset(text)
-        except Exception:
-            QMessageBox.warning(self, '无法打开排版预览', '请检查默认浏览器和安装包中的离线公式组件。')
+        from reader_ui import MarkdownWindow
+        window = MarkdownWindow(text, self)
+        window.show()
+
+    def open_paper_preview(self):
+        paper = self.selected()
+        if paper:
+            from reading_widgets import PaperPreviewWindow
+            window = PaperPreviewWindow(paper, self)
+            window.showMaximized()
+
+    def open_document_reader(self):
+        paper = self.selected()
+        if paper and self.idle_required():
+            from reader_ui import DocumentReader
+            for existing in self.findChildren(DocumentReader):
+                if existing.paper['id'] == paper['id']:
+                    existing.showNormal()
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            window = DocumentReader(paper, self.library.settings(), self.library.path.parent / 'documents', self)
+            window.show()
 
     def fulltext_dialog(self):
         ids = self.selected_ids()
@@ -1018,6 +1053,12 @@ class App(QMainWindow):
                     categories = [(m, n) for m, n in self.library.categories() if n and m != '待分类']
                     result = organize(paper, settings, categories)
                     self.library.update(paper_id, **result, note='')
+                    if extract_first and settings['mode'] == '大模型':
+                        from paper_names import rename_imported
+                        try:
+                            rename_imported(self.library, paper_id, result.get('title') or paper.get('title'))
+                        except Exception:
+                            self.library.update(paper_id, note='整理已完成，原文件无法自动重命名（可能被占用或目录不可写）；保留原文件名。')
             except Exception as exc:
                 failures += 1
                 reason = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else '文件读取或处理失败，请检查格式、加密状态与依赖。'
@@ -1065,6 +1106,7 @@ class App(QMainWindow):
 
     def more_menu(self):
         menu = QMenu(self)
+        menu.addAction('中英对照', self.open_document_reader).setEnabled(bool(self.selected()))
         opening = menu.addMenu('本次打开方式')
         for mode in ('系统默认', '浏览器', '指定程序'):
             opening.addAction(mode, lambda m=mode: self.open_selected(m))
@@ -1118,8 +1160,10 @@ class App(QMainWindow):
             return
         dialog = QDialog(self)
         dialog.setWindowTitle('编辑文献')
+        dialog.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.resize(1220, 850)
+        screen = QApplication.primaryScreen().availableGeometry()
+        dialog.resize(min(1220, screen.width() - 40), min(850, screen.height() - 50))
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(25, 25, 25, 22)
         layout.addWidget(label('校正文献信息', 'heading'))
@@ -1137,7 +1181,14 @@ class App(QMainWindow):
                 entry = QLineEdit(paper[key])
             fields[key] = entry
             form.addRow(caption, entry)
-        layout.addLayout(form)
+        metadata = QWidget()
+        metadata.setLayout(form)
+        metadata_toggle = QCheckBox('显示题目、分类和关键词')
+        metadata_toggle.setChecked(False)
+        metadata.hide()
+        metadata_toggle.toggled.connect(metadata.setVisible)
+        layout.addWidget(metadata_toggle)
+        layout.addWidget(metadata)
         tabs = QTabWidget()
         texts = {}
         for key, caption in [('abstract', '摘要'), ('introduction', '引言'), ('conclusion', '结论'), ('limitations', '局限'), ('summary', '总结'), ('analysis_extra_questions', '补充问题'), ('description', '个人描述')]:
@@ -1147,7 +1198,15 @@ class App(QMainWindow):
         link_edit = QPlainTextEdit(links_text(paper.get('links')))
         link_edit.setPlaceholderText('每行一个：名称 | https://地址\n或：附件名称 | D:\\文献\\附件.pdf')
         tabs.addTab(link_edit, '关联链接')
-        layout.addWidget(editor_toolbar(tabs.currentWidget, lambda: self.open_markdown_preview(tabs.currentWidget().toPlainText())))
+        tabs.setCurrentIndex(4)
+        def edit_large():
+            from reader_ui import MarkdownWindow
+            entry = tabs.currentWidget()
+            window = MarkdownWindow(entry.toPlainText(), dialog, Path(paper['path']).parent,
+                                    'Markdown 编辑 · ' + tabs.tabText(tabs.currentIndex()), entry.setPlainText)
+            window.showMaximized()
+        layout.addWidget(button('在大窗口中编辑当前块 Markdown', edit_large, 'primary'))
+        layout.addWidget(editor_toolbar(tabs.currentWidget, edit_large))
         layout.addWidget(label('左侧编辑，右侧实时排版。公式使用 $...$ 或 $$...$$；Ctrl+B 加粗、Ctrl+I 斜体、Ctrl+K 插入链接。拖动中间分隔条调整宽度。', 'muted', True))
         split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
@@ -1159,12 +1218,22 @@ class App(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(label('实时预览 · 公式与链接', 'eyebrow'))
-        preview = MarkdownPreview(tabs.currentWidget().toPlainText())
+        preview = MarkdownPreview(tabs.currentWidget().toPlainText(), base_dir=Path(paper['path']).parent)
         right_layout.addWidget(preview)
         split.addWidget(left)
         split.addWidget(right)
         split.setChildrenCollapsible(False)
         split.setSizes([580, 580])
+        layout.addWidget(zoom_toolbar(preview))
+        edit_mode = QComboBox()
+        edit_mode.addItems(['Markdown 源码与实时预览', '直接编辑 Markdown', '只看排版预览'])
+        def switch_edit_mode(index):
+            left.setVisible(index != 2)
+            right.setVisible(index != 1)
+            if index == 0:
+                split.setSizes([max(1, split.width() // 2)] * 2)
+        edit_mode.currentIndexChanged.connect(switch_edit_mode)
+        layout.addWidget(edit_mode)
         layout.addWidget(split, 1)
         def refresh_preview():
             preview.setMarkdown(tabs.currentWidget().toPlainText())
@@ -1202,6 +1271,7 @@ class App(QMainWindow):
             self.refresh()
         row.addWidget(button('保存修改', save, 'primary', 'check'))
         layout.addLayout(row)
+        dialog.setWindowState(Qt.WindowState.WindowMaximized)
         dialog.exec()
 
     def settings_dialog(self):
@@ -1213,11 +1283,43 @@ class App(QMainWindow):
                 self.status.setText('设置已保存 · 新发起的整理将使用当前接口配置')
 
     def closeEvent(self, event):
+        from reader_ui import DocumentReader
+        if any(reader.busy for reader in self.findChildren(DocumentReader)):
+            QMessageBox.information(self, '全文仍在处理', '请先停止或完成阅读器中的转换／翻译，再退出程序。')
+            event.ignore()
+            return
+        readers = [r for r in self.findChildren(DocumentReader) if not r._close_ready]
+        if readers:
+            event.ignore()
+            for reader in readers:
+                reader.close()
+            def finish_children():
+                from shiboken6 import isValid
+                if not isValid(self):
+                    return
+                if any(r._flushing_close for r in readers):
+                    QTimer.singleShot(50, finish_children)
+                elif all(r._close_ready for r in readers):
+                    self.close()
+            QTimer.singleShot(50, finish_children)
+            return
         if self.busy and QMessageBox.question(self, '仍在整理', '当前批次尚未完成，已处理结果已保存。确定退出？') != QMessageBox.StandardButton.Yes:
             event.ignore()
         else:
             self.save_layout()
             event.accept()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'category_sidebar'):
+            self.category_sidebar.setVisible(self.width() >= 1180)
+        if hasattr(self, 'compact_navigation'):
+            self.compact_navigation.setVisible(self.width() < 1180)
+        if hasattr(self, 'stat_cards'):
+            self.stat_cards.setVisible(self.height() >= 800 and self.width() >= 1100)
+            self.workspace_heading.setVisible(self.width() >= 1100)
+            self.drop_hint.setVisible(self.width() >= 1100)
+
 
 
 def main():

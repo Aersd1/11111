@@ -29,7 +29,7 @@ DEFAULT_RULES = [
     {'major': '材料科学', 'minor': '电池与储能', 'terms': ['battery', 'batteries', 'supercapacitor', '电池', '储能']},
     {'major': '生命科学', 'minor': '基因与蛋白质', 'terms': ['genome', 'protein', '基因', '蛋白质']},
 ]
-DEFAULT_SETTINGS = {'mode': '大模型', 'opener': '系统默认', 'program': '',
+DEFAULT_SETTINGS = {'translation_pages': 5, 'mode': '大模型', 'opener': '系统默认', 'program': '',
                     'api_config': str(DATA_ROOT / '模型接口' / 'api.json'), 'rules': DEFAULT_RULES}
 
 
@@ -57,7 +57,7 @@ class Library:
                     'description': "TEXT DEFAULT ''", 'links': "TEXT DEFAULT '[]'",
                     'category_locked': 'INTEGER DEFAULT 0', 'end_checked': 'INTEGER DEFAULT 0',
                     'end_note': "TEXT DEFAULT ''", 'analysis_info': "TEXT DEFAULT '{}'",
-                    'analysis_extra_questions': "TEXT DEFAULT ''"}.items():
+                    'analysis_extra_questions': "TEXT DEFAULT ''", 'title_evidence': "TEXT DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f'ALTER TABLE papers ADD COLUMN {name} {definition}')
             db.execute('CREATE TABLE IF NOT EXISTS categories (major TEXT NOT NULL, minor TEXT NOT NULL DEFAULT "", PRIMARY KEY(major,minor))')
@@ -105,7 +105,7 @@ class Library:
 
     def update(self, paper_id, **fields):
         allowed = {'path', 'title', 'abstract', 'keywords', 'introduction', 'major', 'minor', 'summary', 'basis', 'status', 'note'}
-        allowed.update({'conclusion', 'limitations', 'description', 'links', 'category_locked', 'end_checked', 'end_note', 'analysis_info', 'analysis_extra_questions'})
+        allowed.update({'conclusion', 'limitations', 'description', 'links', 'category_locked', 'end_checked', 'end_note', 'analysis_info', 'analysis_extra_questions', 'title_evidence'})
         if not fields or not set(fields) <= allowed:
             raise ValueError('无效字段')
         with self.connect() as db:
@@ -296,6 +296,8 @@ def extract(path):
         title = Path(path).stem
     from paper_sections import extract_end
     result = {'title': title, 'abstract': abstract, 'keywords': keywords, 'introduction': introduction}
+    abstract_heading = re.search(HEADING_PREFIX + ABSTRACT, text, re.I)
+    result['title_evidence'] = text[:abstract_heading.start() if abstract_heading else 800][:2500]
     try:
         result.update(end_fields if end_fields is not None else extract_end(path))
     except Exception:
@@ -360,10 +362,14 @@ def call_model_config(document, payload):
                      '局限性优先提取作者在结论或局限段明确指出的内容；不把未来工作自动当作已证实的缺陷。没有证据则写提供内容未说明。'
                      '优先复用提供的两级分类，允许新建合理类别。仅当无法可靠判断分类时标记 uncertain=true。'
                      '摘要缺少数值结果、实验细节或局限，不代表主题分类不确定。'
-                     '只输出 JSON：major(大类字符串), minor(小类字符串), uncertain(布尔), '
+                     '从 title_evidence 优先识别准确的论文标题，排除作者、期刊会议名称和页眉；没有可靠标题则 title 返回空字符串。'
+                     '只输出 JSON：title(论文标题字符串), major(大类字符串), minor(小类字符串), uncertain(布尔), '
                      'summary(中文字符串，分研究问题、方法、主要发现、局限，未提供则明确写未说明)。'},
                     {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]}
         from api_settings import thinking_options
+        from model_response import JSON_OUTPUT_RULES
+        body['response_format'] = {'type': 'json_object'}
+        body['messages'][0]['content'] += JSON_OUTPUT_RULES
         body.update(thinking_options(cfg))
         request = urllib.request.Request(base + '/chat/completions',
                   data=json.dumps(body).encode(), headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg['api_key']})
@@ -403,6 +409,8 @@ def _organize(paper, settings, categories, model_fn):
     payload['introduction_first_two_paragraphs'] = limited_intro(paper)[:4000]
     payload['conclusion'] = paper.get('conclusion', '')[:5000]
     payload['limitations'] = paper.get('limitations', '')[:2500]
+    if paper.get('title_evidence'):
+        payload['title_evidence'] = paper['title_evidence'][:2500]
     payload['existing_categories'] = categories
     result = model_fn(settings['api_config'], payload)
     basis = '题目、摘要、关键词 / 大模型'
@@ -412,7 +420,9 @@ def _organize(paper, settings, categories, model_fn):
         basis += '；结论'
     if paper.get('limitations'):
         basis += '；局限段'
-    return {'major': '待分类' if result['uncertain'] else result['major'][:100],
+    from paper_names import credible_title
+    title = credible_title(result.get('title'))
+    return {**({'title': title} if title else {}), 'major': '待分类' if result['uncertain'] else result['major'][:100],
             'minor': '待确认' if result['uncertain'] else result['minor'][:100],
             'summary': result['summary'], 'basis': basis,
             'status': '待确认' if result['uncertain'] else '模型已整理'}

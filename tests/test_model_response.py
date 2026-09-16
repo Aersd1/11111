@@ -11,6 +11,39 @@ def response(content, finish='stop', **message):
 
 
 class ModelResponseTests(unittest.TestCase):
+    def test_invalid_json_is_retryable(self):
+        with self.assertRaises(ModelResponseError) as caught:
+            parse_response(response('{"pages":['))
+        self.assertTrue(caught.exception.retryable)
+
+    def test_json_mode_fallback_only_for_explicit_unsupported_parameter(self):
+        import urllib.request
+        request = urllib.request.Request('https://example.invalid/v1/chat/completions', data=json.dumps({'response_format':{'type':'json_object'},'messages':[]}).encode())
+        error = urllib.error.HTTPError(request.full_url, 400, 'unsupported', {}, io.BytesIO(b'{"error":"response_format json_object is not supported"}'))
+        success = io.BytesIO(json.dumps(response('{"ok":true}')).encode())
+        success.headers = {}
+        with patch('urllib.request.urlopen', side_effect=[error, success]) as opened:
+            result, _ = request_json(request)
+            self.assertTrue(result['ok'])
+            self.assertNotIn('response_format', json.loads(opened.call_args_list[1].args[0].data))
+            self.assertEqual(opened.call_count, 2)
+
+    def test_request_enforces_json_mode_and_simplified_chinese(self):
+        from agent_search import model_json
+        cfg = {'OpenAI':{'base_url':'https://example.invalid/v1','api_key':'test','model':'test'}}
+        with patch('agent_search.read_config',return_value=cfg), patch('agent_search.request_json',return_value=({},0)) as sent:
+            model_json('unused','返回所需字段。',{'input':'data'},100)
+            body = json.loads(sent.call_args.args[0].data)
+            self.assertEqual(body['response_format'], {'type':'json_object'})
+            self.assertIn('简体中文',body['messages'][0]['content'])
+            self.assertIn('RFC 8259',body['messages'][0]['content'])
+
+    def test_broken_stream_frame_is_retryable(self):
+        for raw in (b'data: {"choices":', b'data: \xe4\xb8'):
+            with self.assertRaises(ModelResponseError) as caught:
+                read_stream(io.BytesIO(raw))
+            self.assertTrue(caught.exception.retryable)
+
     def test_stream_assembles_json_and_ignores_reasoning(self):
         events = [
             {'choices': [{'index': 0, 'delta': {'reasoning_content': 'private reasoning'}}]},

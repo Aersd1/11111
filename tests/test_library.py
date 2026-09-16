@@ -70,7 +70,7 @@ class LibraryTests(unittest.TestCase):
             return {'major': '人工智能', 'minor': '语言模型', 'summary': '研究提示词，摘要未提供数值结果。', 'uncertain': len(calls) == 1}
         result = organize(extract(self.source), DEFAULT_SETTINGS, [], model_fn=fake)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(set(calls[0]), {'title', 'abstract', 'keywords', 'existing_categories', 'introduction_first_two_paragraphs', 'conclusion', 'limitations'})
+        self.assertEqual(set(calls[0]), {'title', 'title_evidence', 'abstract', 'keywords', 'existing_categories', 'introduction_first_two_paragraphs', 'conclusion', 'limitations'})
         self.assertIn('Second introduction', calls[0]['introduction_first_two_paragraphs'])
         self.assertNotIn('Third paragraph', json.dumps(calls))
         self.assertEqual(result['major'], '待分类')
